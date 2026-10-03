@@ -1,0 +1,8 @@
+{
+  "plugins": [
+    "expo-status-bar"
+  ],
+  "android": {
+    "package": "com.anonymous.myapp"
+  }
+}
