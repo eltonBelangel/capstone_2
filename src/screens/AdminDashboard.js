@@ -13,6 +13,8 @@ import {
   StatusBar,
   Image,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import {
   collection,
@@ -25,7 +27,7 @@ import {
   updateDoc,
   addDoc,
 } from "firebase/firestore";
-import { auth, db } from "../../firebaseConfig"; // ✅ FIXED PATH
+import { auth, db } from "../../firebaseConfig";
 
 import { signOut } from "firebase/auth";
 import * as ImagePicker from "expo-image-picker";
@@ -41,7 +43,7 @@ export default function AdminDashboard({ navigation }) {
   const [editField, setEditField] = useState("");
   const [editValue, setEditValue] = useState("");
 
-  // Add Tourist Spot state
+  // Add tourist spot state
   const [addSpotModal, setAddSpotModal] = useState(false);
   const [spotName, setSpotName] = useState("");
   const [spotDescription, setSpotDescription] = useState("");
@@ -63,7 +65,10 @@ export default function AdminDashboard({ navigation }) {
       setOwners(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
     unsubscribers.current.push(unsubUsers, unsubOwners);
-    return () => { unsubUsers(); unsubOwners(); };
+    return () => {
+      unsubUsers();
+      unsubOwners();
+    };
   }, []);
 
   useEffect(() => {
@@ -82,9 +87,9 @@ export default function AdminDashboard({ navigation }) {
     return () => unsubSpots();
   }, []);
 
-  // ── Delete ──
-  const handleDelete = async (collectionName, itemId) => {
-    Alert.alert("Confirm Delete", "Are you sure you want to delete this item?", [
+  // Delete
+  const handleDelete = (collectionName, itemId) => {
+    Alert.alert("Delete record", "This record will be permanently removed.", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
@@ -97,27 +102,24 @@ export default function AdminDashboard({ navigation }) {
                 where("ownerId", "==", itemId)
               );
               const snapshot = await getDocs(ownerVehiclesQuery);
-              snapshot.forEach(async (v) => {
-                await deleteDoc(doc(db, "vehicles", v.id));
-              });
+              await Promise.all(
+                snapshot.docs.map((v) => deleteDoc(doc(db, "vehicles", v.id)))
+              );
             }
             await deleteDoc(doc(db, collectionName, itemId));
-            Alert.alert("Success", "Deleted successfully.");
           } catch (error) {
-            Alert.alert("Error", "Failed to delete item.");
+            Alert.alert("Could not delete", "Check your connection and try again.");
           }
         },
       },
     ]);
   };
 
-  // ── Edit ──
+  // Edit
   const openEdit = (item, collectionName) => {
     setEditItem({ ...item, collectionName });
     const mainField =
-      collectionName === "vehicles"
-        ? "name"
-        : collectionName === "touristSpots"
+      collectionName === "vehicles" || collectionName === "touristSpots"
         ? "name"
         : "username";
     setEditField(mainField);
@@ -131,18 +133,17 @@ export default function AdminDashboard({ navigation }) {
       await updateDoc(doc(db, editItem.collectionName, editItem.id), {
         [editField]: editValue,
       });
-      Alert.alert("Success", "Updated successfully.");
       setEditModal(false);
     } catch (error) {
-      Alert.alert("Error", "Failed to update.");
+      Alert.alert("Could not save", "Check your connection and try again.");
     }
   };
 
-  // ── Pick image from gallery ──
+  // Pick image from gallery
   const pickSpotImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("Permission Denied", "We need gallery access to pick an image.");
+      Alert.alert("Permission needed", "Allow gallery access to choose a photo.");
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -156,19 +157,18 @@ export default function AdminDashboard({ navigation }) {
     }
   };
 
-  // ── Convert image to Base64 (stored in Firestore, no Storage needed) ──
+  // Convert image to base64 (stored in Firestore, no Storage needed)
   const uploadSpotImage = async (uri) => {
     const response = await fetch(uri);
     const blob = await response.blob();
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => resolve(reader.result); // returns "data:image/jpeg;base64,..."
+      reader.onload = () => resolve(reader.result);
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
   };
 
-  // ── Reset form ──
   const resetAddSpotForm = () => {
     setSpotName("");
     setSpotDescription("");
@@ -178,20 +178,24 @@ export default function AdminDashboard({ navigation }) {
     setSpotImage(null);
   };
 
-  // ── Save new tourist spot to Firestore ──
+  const closeAddSpot = () => {
+    setAddSpotModal(false);
+    resetAddSpotForm();
+  };
+
   const handleAddSpot = async () => {
     if (!spotName.trim()) {
-      Alert.alert("Validation", "Please enter a spot name.");
+      Alert.alert("Name required", "Enter a name for the spot.");
       return;
     }
     if (!spotLatitude.trim() || !spotLongitude.trim()) {
-      Alert.alert("Validation", "Please enter latitude and longitude.");
+      Alert.alert("Coordinates required", "Enter both latitude and longitude.");
       return;
     }
     const lat = parseFloat(spotLatitude);
     const lng = parseFloat(spotLongitude);
     if (isNaN(lat) || isNaN(lng)) {
-      Alert.alert("Validation", "Latitude and longitude must be valid numbers.");
+      Alert.alert("Invalid coordinates", "Latitude and longitude must be numbers.");
       return;
     }
 
@@ -211,23 +215,21 @@ export default function AdminDashboard({ navigation }) {
         createdAt: new Date(),
       });
 
-      Alert.alert("Success", "Tourist spot added! It will appear on the map instantly.");
-      setAddSpotModal(false);
-      resetAddSpotForm();
+      closeAddSpot();
     } catch (error) {
       console.error(error);
-      Alert.alert("Error", "Failed to add tourist spot.");
+      Alert.alert("Could not add spot", "Check your connection and try again.");
     } finally {
       setUploadingSpot(false);
     }
   };
 
-  // ── Logout ──
+  // Logout
   const handleLogout = () => {
-    Alert.alert("Logout", "Are you sure you want to log out?", [
+    Alert.alert("Log out", "You will need to sign in again.", [
       { text: "Cancel", style: "cancel" },
       {
-        text: "Logout",
+        text: "Log out",
         style: "destructive",
         onPress: async () => {
           try {
@@ -236,7 +238,7 @@ export default function AdminDashboard({ navigation }) {
             await signOut(auth);
             navigation.replace("Login");
           } catch (error) {
-            Alert.alert("Error", "Failed to log out. Please try again.");
+            Alert.alert("Could not log out", "Try again.");
           }
         },
       },
@@ -245,11 +247,11 @@ export default function AdminDashboard({ navigation }) {
 
   const handleBack = () => setActiveTable(null);
 
-  const cardData = [
-    { key: "users", label: "Users", count: users.length, color: "#4F6FFF", icon: "👤" },
-    { key: "owners", label: "Owners", count: owners.length, color: "#7C4FFF", icon: "🏪" },
-    { key: "vehicles", label: "Vehicles", count: vehicles.length, color: "#4FAAFF", icon: "🚗" },
-    { key: "spots", label: "Tourist Spots", count: spots.length, color: "#1DAB87", icon: "📍" },
+  const sections = [
+    { key: "users", label: "Users", count: users.length },
+    { key: "owners", label: "Owners", count: owners.length },
+    { key: "vehicles", label: "Vehicles", count: vehicles.length },
+    { key: "spots", label: "Tourist spots", count: spots.length },
   ];
 
   const getTableData = () => {
@@ -261,12 +263,17 @@ export default function AdminDashboard({ navigation }) {
   };
 
   const getTableTitle = () => {
-    const map = { users: "Users", owners: "Owners", vehicles: "Vehicles", spots: "Tourist Spots" };
+    const map = {
+      users: "Users",
+      owners: "Owners",
+      vehicles: "Vehicles",
+      spots: "Tourist spots",
+    };
     return map[activeTable] || "";
   };
 
   const renderTableRow = (item, collectionName) => {
-    const name = item.username || item.name || item.category || "—";
+    const name = item.username || item.name || item.category || "Untitled";
     const sub =
       item.email ||
       item.plate ||
@@ -274,36 +281,42 @@ export default function AdminDashboard({ navigation }) {
         ? `${item.location.lat?.toFixed(4)}, ${item.location.lng?.toFixed(4)}`
         : null) ||
       item.ownerId ||
-      "—";
+      null;
     const badge = item.role || item.status || item.capabilities?.[0] || null;
+    const meta = [sub, badge].filter(Boolean).join("   ");
 
     return (
       <View style={styles.tableRow} key={item.id}>
         {collectionName === "touristSpots" && item.imageUrl ? (
           <Image source={{ uri: item.imageUrl }} style={styles.rowThumb} />
-        ) : (
-          <View style={styles.rowAvatar}>
-            <Text style={styles.rowAvatarText}>{name.charAt(0).toUpperCase()}</Text>
-          </View>
-        )}
+        ) : null}
         <View style={styles.rowInfo}>
-          <Text style={styles.rowName} numberOfLines={1}>{name}</Text>
-          <Text style={styles.rowSub} numberOfLines={1}>{sub}</Text>
-          {collectionName === "touristSpots" && item.description ? (
-            <Text style={styles.rowDesc} numberOfLines={1}>{item.description}</Text>
+          <Text style={styles.rowName} numberOfLines={1}>
+            {name}
+          </Text>
+          {meta ? (
+            <Text style={styles.rowSub} numberOfLines={1}>
+              {meta}
+            </Text>
           ) : null}
-          {badge && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{badge}</Text>
-            </View>
-          )}
+          {collectionName === "touristSpots" && item.description ? (
+            <Text style={styles.rowDesc} numberOfLines={1}>
+              {item.description}
+            </Text>
+          ) : null}
         </View>
         <View style={styles.rowActions}>
-          <TouchableOpacity style={styles.editBtn} onPress={() => openEdit(item, collectionName)}>
-            <Text style={styles.editBtnText}>Edit</Text>
+          <TouchableOpacity
+            onPress={() => openEdit(item, collectionName)}
+            hitSlop={8}
+          >
+            <Text style={styles.actionText}>Edit</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDelete(collectionName, item.id)}>
-            <Text style={styles.deleteBtnText}>Del</Text>
+          <TouchableOpacity
+            onPress={() => handleDelete(collectionName, item.id)}
+            hitSlop={8}
+          >
+            <Text style={[styles.actionText, styles.actionDanger]}>Delete</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -314,83 +327,92 @@ export default function AdminDashboard({ navigation }) {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="light-content" backgroundColor="#0A0E2A" />
+      <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
-      {/* HEADER */}
+      {/* Header */}
       <View style={styles.header}>
         {activeTable ? (
-          <TouchableOpacity onPress={handleBack} style={styles.backBtn}>
-            <Text style={styles.backBtnText}>← Back</Text>
+          <TouchableOpacity onPress={handleBack} hitSlop={8}>
+            <Text style={styles.headerLink}>Back</Text>
           </TouchableOpacity>
         ) : (
-          <View style={{ width: 70 }} />
+          <View />
         )}
-        <Text style={styles.headerTitle}>
-          {activeTable ? getTableTitle() : "Admin Panel"}
-        </Text>
-        <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
-          <Text style={styles.logoutBtnText}>Logout</Text>
+        <TouchableOpacity onPress={handleLogout} hitSlop={8}>
+          <Text style={styles.headerLink}>Log out</Text>
         </TouchableOpacity>
       </View>
 
-      {/* HOME VIEW */}
+      <Text style={styles.title}>{activeTable ? getTableTitle() : "Admin"}</Text>
+
+      {/* Home */}
       {!activeTable && (
-        <ScrollView contentContainerStyle={styles.homeContainer}>
-          <Text style={styles.welcomeText}>Welcome, Admin 👋</Text>
-          <Text style={styles.subText}>Manage your app from here</Text>
+        <ScrollView
+          contentContainerStyle={styles.homeContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.sectionLabel}>Records</Text>
+          {sections.map((s) => (
+            <TouchableOpacity
+              key={s.key}
+              style={styles.navRow}
+              onPress={() => setActiveTable(s.key)}
+              activeOpacity={0.6}
+            >
+              <Text style={styles.navLabel}>{s.label}</Text>
+              <Text style={styles.navCount}>{s.count}</Text>
+            </TouchableOpacity>
+          ))}
 
-          <View style={styles.cardsGrid}>
-            {cardData.map((card) => (
-              <TouchableOpacity
-                key={card.key}
-                style={[styles.card, { backgroundColor: card.color }]}
-                onPress={() => setActiveTable(card.key)}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.cardIcon}>{card.icon}</Text>
-                <Text style={styles.cardCount}>{card.count}</Text>
-                <Text style={styles.cardLabel}>{card.label}</Text>
-                <View style={styles.cardArrow}>
-                  <Text style={styles.cardArrowText}>→</Text>
-                </View>
-
-                {/* "+ Add" button only on Tourist Spots card */}
-                {card.key === "spots" && (
-                  <TouchableOpacity
-                    style={styles.cardAddBtn}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      setAddSpotModal(true);
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.cardAddBtnText}>+ Add Spot</Text>
-                  </TouchableOpacity>
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
+          <Text style={[styles.sectionLabel, styles.sectionGap]}>Manage</Text>
+          <TouchableOpacity
+            style={styles.navRow}
+            onPress={() => navigation.navigate("AdminPackages")}
+            activeOpacity={0.6}
+          >
+            <View style={styles.flex}>
+              <Text style={styles.navLabel}>Trip packages</Text>
+              <Text style={styles.navHint}>Multi-leg trips with pricing</Text>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.navRow}
+            onPress={() => navigation.navigate("AdminHotels")}
+            activeOpacity={0.6}
+          >
+            <View style={styles.flex}>
+              <Text style={styles.navLabel}>Partner hotels</Text>
+              <Text style={styles.navHint}>Booking links and availability</Text>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.navRow}
+            onPress={() => setAddSpotModal(true)}
+            activeOpacity={0.6}
+          >
+            <View style={styles.flex}>
+              <Text style={styles.navLabel}>Add tourist spot</Text>
+              <Text style={styles.navHint}>Appears on the map right away</Text>
+            </View>
+          </TouchableOpacity>
         </ScrollView>
       )}
 
-      {/* TABLE VIEW */}
+      {/* Table */}
       {activeTable && (
         <View style={styles.tableContainer}>
           <View style={styles.tableTopRow}>
-            <Text style={styles.tableCount}>{data.length} records found</Text>
+            <Text style={styles.tableCount}>
+              {data.length} {data.length === 1 ? "record" : "records"}
+            </Text>
             {activeTable === "spots" && (
               <TouchableOpacity
-                style={styles.addSpotHeaderBtn}
                 onPress={() => setAddSpotModal(true)}
+                hitSlop={8}
               >
-                <Text style={styles.addSpotHeaderBtnText}>+ Add Spot</Text>
+                <Text style={styles.headerAction}>Add spot</Text>
               </TouchableOpacity>
             )}
-          </View>
-
-          <View style={styles.tableHeader}>
-            <Text style={[styles.tableHeaderText, { flex: 1 }]}>Name / Info</Text>
-            <Text style={[styles.tableHeaderText, { width: 110, textAlign: "center" }]}>Actions</Text>
           </View>
 
           <FlatList
@@ -399,416 +421,388 @@ export default function AdminDashboard({ navigation }) {
             renderItem={({ item }) => renderTableRow(item, colName)}
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
-                <Text style={styles.emptyText}>No records found.</Text>
+                <Text style={styles.emptyTitle}>Nothing here yet</Text>
+                <Text style={styles.emptySub}>
+                  Records will show up here as they are created.
+                </Text>
               </View>
             }
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: 20 }}
+            contentContainerStyle={styles.listContent}
           />
         </View>
       )}
 
-      {/* ══════════════════════════════════════
-          ADD TOURIST SPOT MODAL
-      ══════════════════════════════════════ */}
-      <Modal visible={addSpotModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.addSpotCard}>
-            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-
-              {/* Header */}
-              <View style={styles.addSpotHeaderRow}>
-                <Text style={styles.addSpotTitle}>📍 Add Tourist Spot</Text>
-                <TouchableOpacity
-                  onPress={() => { setAddSpotModal(false); resetAddSpotForm(); }}
-                >
-                  <Text style={styles.closeX}>✕</Text>
+      {/* Add tourist spot */}
+      <Modal
+        visible={addSpotModal}
+        transparent
+        animationType="slide"
+        onRequestClose={closeAddSpot}
+      >
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <View style={styles.overlay}>
+            <View style={[styles.sheet, styles.sheetTall]}>
+              <View style={styles.sheetHeader}>
+                <Text style={styles.sheetTitle}>New tourist spot</Text>
+                <TouchableOpacity onPress={closeAddSpot} hitSlop={8}>
+                  <Text style={styles.headerLink}>Close</Text>
                 </TouchableOpacity>
               </View>
 
-              {/* Image Picker */}
-              <Text style={styles.fieldLabel}>Photo</Text>
-              <TouchableOpacity style={styles.imagePicker} onPress={pickSpotImage}>
-                {spotImage ? (
-                  <Image source={{ uri: spotImage }} style={styles.imagePreview} />
-                ) : (
-                  <View style={styles.imagePlaceholder}>
-                    <Text style={styles.imagePlaceholderIcon}>🖼️</Text>
-                    <Text style={styles.imagePlaceholderText}>Tap to select a photo</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-              {spotImage && (
-                <TouchableOpacity onPress={() => setSpotImage(null)} style={styles.removeImageBtn}>
-                  <Text style={styles.removeImageText}>✕ Remove Image</Text>
-                </TouchableOpacity>
-              )}
-
-              {/* Spot Name */}
-              <Text style={styles.fieldLabel}>Spot Name *</Text>
-              <TextInput
-                style={styles.fieldInput}
-                value={spotName}
-                onChangeText={setSpotName}
-                placeholder="e.g. White Sand Beach"
-                placeholderTextColor="#555"
-              />
-
-              {/* Category */}
-              <Text style={styles.fieldLabel}>Category</Text>
-              <TextInput
-                style={styles.fieldInput}
-                value={spotCategory}
-                onChangeText={setSpotCategory}
-                placeholder="e.g. Beach, Mountain, Heritage"
-                placeholderTextColor="#555"
-              />
-
-              {/* Description */}
-              <Text style={styles.fieldLabel}>Description</Text>
-              <TextInput
-                style={[styles.fieldInput, styles.textArea]}
-                value={spotDescription}
-                onChangeText={setSpotDescription}
-                placeholder="Short description of this tourist spot..."
-                placeholderTextColor="#555"
-                multiline
-                numberOfLines={3}
-                textAlignVertical="top"
-              />
-
-              {/* Coordinates */}
-              <Text style={styles.fieldLabel}>Coordinates *</Text>
-              <View style={styles.coordRow}>
-                <View style={{ flex: 1, marginRight: 8 }}>
-                  <Text style={styles.coordHint}>Latitude</Text>
-                  <TextInput
-                    style={styles.fieldInput}
-                    value={spotLatitude}
-                    onChangeText={setSpotLatitude}
-                    placeholder="e.g. 10.6407"
-                    placeholderTextColor="#555"
-                    keyboardType="numeric"
-                  />
-                </View>
-                <View style={{ flex: 1, marginLeft: 8 }}>
-                  <Text style={styles.coordHint}>Longitude</Text>
-                  <TextInput
-                    style={styles.fieldInput}
-                    value={spotLongitude}
-                    onChangeText={setSpotLongitude}
-                    placeholder="e.g. 122.9663"
-                    placeholderTextColor="#555"
-                    keyboardType="numeric"
-                  />
-                </View>
-              </View>
-
-              {/* Tip */}
-              <View style={styles.tipBox}>
-                <Text style={styles.tipText}>
-                  💡 Tip: Open Google Maps → long press any location → the coordinates appear at the top. Copy them here.
-                </Text>
-              </View>
-
-              {/* Buttons */}
-              <View style={styles.modalActions}>
-                <TouchableOpacity
-                  style={styles.modalCancel}
-                  onPress={() => { setAddSpotModal(false); resetAddSpotForm(); }}
-                  disabled={uploadingSpot}
-                >
-                  <Text style={styles.modalCancelText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalSave, uploadingSpot && { opacity: 0.6 }]}
-                  onPress={handleAddSpot}
-                  disabled={uploadingSpot}
-                >
-                  {uploadingSpot ? (
-                    <ActivityIndicator color="#fff" size="small" />
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                <Text style={styles.label}>Photo</Text>
+                <TouchableOpacity style={styles.imagePicker} onPress={pickSpotImage}>
+                  {spotImage ? (
+                    <Image source={{ uri: spotImage }} style={styles.imagePreview} />
                   ) : (
-                    <Text style={styles.modalSaveText}>Add Spot</Text>
+                    <View style={styles.imagePlaceholder}>
+                      <Text style={styles.imagePlaceholderText}>Choose a photo</Text>
+                    </View>
                   )}
                 </TouchableOpacity>
-              </View>
+                {spotImage && (
+                  <TouchableOpacity
+                    onPress={() => setSpotImage(null)}
+                    style={styles.removeImageBtn}
+                    hitSlop={8}
+                  >
+                    <Text style={[styles.actionText, styles.actionDanger]}>
+                      Remove photo
+                    </Text>
+                  </TouchableOpacity>
+                )}
 
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+                <Text style={styles.label}>Name</Text>
+                <TextInput
+                  style={styles.input}
+                  value={spotName}
+                  onChangeText={setSpotName}
+                  placeholder="White Sand Beach"
+                  placeholderTextColor={C.faint}
+                />
 
-      {/* EDIT MODAL */}
-      <Modal visible={editModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.addSpotTitle}>Edit Record</Text>
-            <Text style={styles.fieldLabel}>
-              {editField.charAt(0).toUpperCase() + editField.slice(1)}
-            </Text>
-            <TextInput
-              style={styles.fieldInput}
-              value={editValue}
-              onChangeText={setEditValue}
-              placeholder="Enter new value"
-              placeholderTextColor="#999"
-            />
-            <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.modalCancel} onPress={() => setEditModal(false)}>
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalSave} onPress={handleSaveEdit}>
-                <Text style={styles.modalSaveText}>Save</Text>
-              </TouchableOpacity>
+                <Text style={styles.label}>Category</Text>
+                <TextInput
+                  style={styles.input}
+                  value={spotCategory}
+                  onChangeText={setSpotCategory}
+                  placeholder="Beach, mountain, heritage"
+                  placeholderTextColor={C.faint}
+                />
+
+                <Text style={styles.label}>Description</Text>
+                <TextInput
+                  style={[styles.input, styles.textArea]}
+                  value={spotDescription}
+                  onChangeText={setSpotDescription}
+                  placeholder="A short description"
+                  placeholderTextColor={C.faint}
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
+                />
+
+                <View style={styles.inline}>
+                  <View style={[styles.flex, styles.gapRight]}>
+                    <Text style={styles.label}>Latitude</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={spotLatitude}
+                      onChangeText={setSpotLatitude}
+                      placeholder="10.6407"
+                      placeholderTextColor={C.faint}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={[styles.flex, styles.gapLeft]}>
+                    <Text style={styles.label}>Longitude</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={spotLongitude}
+                      onChangeText={setSpotLongitude}
+                      placeholder="122.9663"
+                      placeholderTextColor={C.faint}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+                <Text style={styles.hint}>
+                  In Google Maps, long press a location to see its coordinates at
+                  the top.
+                </Text>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={styles.secondaryBtn}
+                    onPress={closeAddSpot}
+                    disabled={uploadingSpot}
+                  >
+                    <Text style={styles.secondaryText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.primaryBtn,
+                      styles.flex,
+                      uploadingSpot && styles.disabled,
+                    ]}
+                    onPress={handleAddSpot}
+                    disabled={uploadingSpot}
+                  >
+                    {uploadingSpot ? (
+                      <ActivityIndicator color={C.bg} size="small" />
+                    ) : (
+                      <Text style={styles.primaryText}>Add spot</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
+      {/* Edit */}
+      <Modal
+        visible={editModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setEditModal(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <View style={styles.overlay}>
+            <View style={styles.sheet}>
+              <View style={styles.sheetHeader}>
+                <Text style={styles.sheetTitle}>Edit record</Text>
+                <TouchableOpacity onPress={() => setEditModal(false)} hitSlop={8}>
+                  <Text style={styles.headerLink}>Close</Text>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.label}>
+                {editField.charAt(0).toUpperCase() + editField.slice(1)}
+              </Text>
+              <TextInput
+                style={styles.input}
+                value={editValue}
+                onChangeText={setEditValue}
+                placeholder="Enter a new value"
+                placeholderTextColor={C.faint}
+              />
+
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.secondaryBtn}
+                  onPress={() => setEditModal(false)}
+                >
+                  <Text style={styles.secondaryText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.primaryBtn, styles.flex]}
+                  onPress={handleSaveEdit}
+                >
+                  <Text style={styles.primaryText}>Save changes</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0A0E2A", paddingTop: 30 },
+// Palette
+const C = {
+  bg: "#0E1116",
+  surface: "#151A21",
+  border: "#232A33",
+  text: "#E8EAED",
+  muted: "#8A929E",
+  faint: "#566070",
+  danger: "#E5736B",
+};
 
-  // HEADER
+const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  safe: { flex: 1, backgroundColor: C.bg },
+
+  // Header
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    paddingTop: 20,
-    backgroundColor: "#0A0E2A",
-    borderBottomWidth: 1,
-    borderBottomColor: "#1A1F3A",
+    paddingHorizontal: 24,
+    paddingTop:
+      Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 16 : 20,
   },
-  headerTitle: { fontSize: 18, fontWeight: "bold", color: "#fff" },
-  backBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    backgroundColor: "#1A1F3A",
-    borderRadius: 8,
+  headerLink: { color: C.muted, fontSize: 15 },
+  headerAction: { color: C.text, fontSize: 15, fontWeight: "600" },
+  title: {
+    color: C.text,
+    fontSize: 30,
+    fontWeight: "700",
+    letterSpacing: -0.5,
+    paddingHorizontal: 24,
+    marginTop: 18,
+    marginBottom: 8,
   },
-  backBtnText: { color: "#7C9FFF", fontWeight: "600", fontSize: 14 },
-  logoutBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: "#FF3B30",
-    borderRadius: 8,
-  },
-  logoutBtnText: { color: "#fff", fontWeight: "600", fontSize: 13 },
 
-  // HOME
-  homeContainer: { padding: 20, paddingTop: 28 },
-  welcomeText: { fontSize: 26, fontWeight: "bold", color: "#fff", marginBottom: 4 },
-  subText: { fontSize: 14, color: "#8A90B8", marginBottom: 28 },
-  cardsGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: 14 },
-  card: {
-    width: "47%",
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 4,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  cardIcon: { fontSize: 28, marginBottom: 10 },
-  cardCount: { fontSize: 36, fontWeight: "800", color: "#fff" },
-  cardLabel: { fontSize: 14, color: "rgba(255,255,255,0.85)", fontWeight: "600", marginTop: 4 },
-  cardArrow: {
-    position: "absolute",
-    bottom: 14,
-    right: 16,
-    backgroundColor: "rgba(255,255,255,0.2)",
-    borderRadius: 20,
-    width: 28,
-    height: 28,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  cardArrowText: { color: "#fff", fontSize: 14, fontWeight: "bold" },
-  cardAddBtn: {
+  // Home
+  homeContent: { paddingHorizontal: 24, paddingBottom: 48 },
+  sectionLabel: {
+    color: C.muted,
+    fontSize: 13,
+    fontWeight: "500",
     marginTop: 12,
-    backgroundColor: "rgba(255,255,255,0.25)",
-    borderRadius: 10,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    alignSelf: "flex-start",
+    marginBottom: 4,
   },
-  cardAddBtnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
+  sectionGap: { marginTop: 36 },
+  navRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 18,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: C.border,
+  },
+  navLabel: { color: C.text, fontSize: 17, fontWeight: "500" },
+  navHint: { color: C.muted, fontSize: 13, marginTop: 3 },
+  navCount: { color: C.muted, fontSize: 17, fontVariant: ["tabular-nums"] },
 
-  // TABLE
-  tableContainer: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
+  // Table
+  tableContainer: { flex: 1 },
   tableTopRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 10,
+    paddingHorizontal: 24,
+    marginBottom: 8,
   },
-  tableCount: { fontSize: 13, color: "#8A90B8" },
-  addSpotHeaderBtn: {
-    backgroundColor: "#1DAB87",
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-  },
-  addSpotHeaderBtnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
-  tableHeader: {
-    flexDirection: "row",
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    backgroundColor: "#1A1F3A",
-    borderRadius: 10,
-    marginBottom: 6,
-  },
-  tableHeaderText: { color: "#8A90B8", fontSize: 13, fontWeight: "700" },
+  tableCount: { fontSize: 13, color: C.muted },
+  listContent: { paddingHorizontal: 24, paddingBottom: 48, flexGrow: 1 },
   tableRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#131729",
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: "#1A1F3A",
+    paddingVertical: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: C.border,
   },
-  rowAvatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "#4F6FFF",
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 12,
-  },
-  rowAvatarText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
-  rowThumb: { width: 42, height: 42, borderRadius: 8, marginRight: 12 },
-  rowInfo: { flex: 1 },
-  rowName: { color: "#fff", fontWeight: "600", fontSize: 14 },
-  rowSub: { color: "#8A90B8", fontSize: 12, marginTop: 2 },
-  rowDesc: { color: "#6A7090", fontSize: 11, marginTop: 2, fontStyle: "italic" },
-  badge: {
-    marginTop: 4,
-    alignSelf: "flex-start",
-    backgroundColor: "#1A2A4A",
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  badgeText: { color: "#4F9FFF", fontSize: 11, fontWeight: "600" },
-  rowActions: { flexDirection: "row", gap: 6 },
-  editBtn: {
-    backgroundColor: "#1A3A6A",
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-  },
-  editBtnText: { color: "#4F9FFF", fontWeight: "700", fontSize: 12 },
-  deleteBtn: {
-    backgroundColor: "#3A1A1A",
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-  },
-  deleteBtnText: { color: "#FF3B30", fontWeight: "700", fontSize: 12 },
-  emptyContainer: { alignItems: "center", marginTop: 60 },
-  emptyText: { color: "#8A90B8", fontStyle: "italic", fontSize: 15 },
+  rowThumb: { width: 44, height: 44, borderRadius: 6, marginRight: 14 },
+  rowInfo: { flex: 1, marginRight: 12 },
+  rowName: { color: C.text, fontSize: 16, fontWeight: "600" },
+  rowSub: { color: C.muted, fontSize: 13, marginTop: 3 },
+  rowDesc: { color: C.faint, fontSize: 13, marginTop: 3 },
+  rowActions: { flexDirection: "row", gap: 18 },
+  actionText: { color: C.muted, fontSize: 14, fontWeight: "500" },
+  actionDanger: { color: C.danger },
 
-  // MODALS SHARED
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.75)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 20,
+  // Empty
+  emptyContainer: { paddingTop: 72 },
+  emptyTitle: {
+    color: C.text,
+    fontSize: 18,
+    fontWeight: "600",
+    marginBottom: 6,
   },
-  modalCard: {
-    backgroundColor: "#131729",
-    borderRadius: 20,
-    padding: 24,
-    width: "100%",
-    borderWidth: 1,
-    borderColor: "#1A1F3A",
-  },
-  modalActions: { flexDirection: "row", gap: 12, marginTop: 4 },
-  modalCancel: {
-    flex: 1,
-    padding: 14,
-    borderRadius: 10,
-    backgroundColor: "#1A1F3A",
-    alignItems: "center",
-  },
-  modalCancelText: { color: "#8A90B8", fontWeight: "700" },
-  modalSave: {
-    flex: 1,
-    padding: 14,
-    borderRadius: 10,
-    backgroundColor: "#1DAB87",
-    alignItems: "center",
-  },
-  modalSaveText: { color: "#fff", fontWeight: "700" },
+  emptySub: { color: C.muted, fontSize: 15, lineHeight: 22 },
 
-  // ADD SPOT MODAL
-  addSpotCard: {
-    backgroundColor: "#131729",
-    borderRadius: 24,
-    padding: 22,
-    width: "100%",
-    maxHeight: "92%",
-    borderWidth: 1,
-    borderColor: "#1A1F3A",
+  // Sheets
+  overlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "flex-end",
   },
-  addSpotHeaderRow: {
+  sheet: {
+    backgroundColor: C.surface,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingHorizontal: 24,
+    paddingTop: 22,
+    paddingBottom: 8,
+  },
+  sheetTall: { maxHeight: "92%" },
+  sheetHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 18,
+    marginBottom: 4,
   },
-  addSpotTitle: { fontSize: 19, fontWeight: "bold", color: "#fff" },
-  closeX: { fontSize: 18, color: "#8A90B8", fontWeight: "bold", padding: 4 },
-  fieldLabel: { fontSize: 13, color: "#8A90B8", fontWeight: "600", marginBottom: 6, marginTop: 14 },
-  fieldInput: {
-    backgroundColor: "#0A0E2A",
+  sheetTitle: { color: C.text, fontSize: 20, fontWeight: "700" },
+
+  label: {
+    color: C.muted,
+    fontSize: 13,
+    fontWeight: "500",
+    marginTop: 18,
+    marginBottom: 8,
+  },
+  hint: { color: C.faint, fontSize: 13, lineHeight: 19, marginTop: 12 },
+  input: {
+    backgroundColor: C.bg,
     borderWidth: 1,
-    borderColor: "#2A3A5A",
-    borderRadius: 10,
-    padding: 13,
-    color: "#fff",
-    fontSize: 14,
+    borderColor: C.border,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: C.text,
+    fontSize: 15,
   },
-  textArea: { minHeight: 80, textAlignVertical: "top" },
-  coordRow: { flexDirection: "row" },
-  coordHint: { fontSize: 12, color: "#6A7090", marginBottom: 4 },
+  textArea: { minHeight: 84, textAlignVertical: "top" },
+  inline: { flexDirection: "row" },
+  gapRight: { marginRight: 6 },
+  gapLeft: { marginLeft: 6 },
+
+  // Image picker
   imagePicker: {
-    borderWidth: 1.5,
-    borderColor: "#2A3A5A",
+    borderWidth: 1,
+    borderColor: C.border,
     borderStyle: "dashed",
-    borderRadius: 12,
+    borderRadius: 8,
     overflow: "hidden",
   },
-  imagePreview: { width: "100%", height: 160, borderRadius: 12 },
+  imagePreview: { width: "100%", height: 160 },
   imagePlaceholder: {
-    height: 120,
+    height: 96,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#0A0E2A",
+    backgroundColor: C.bg,
   },
-  imagePlaceholderIcon: { fontSize: 32, marginBottom: 6 },
-  imagePlaceholderText: { color: "#5A6080", fontSize: 13 },
-  removeImageBtn: { marginTop: 6, alignSelf: "flex-end" },
-  removeImageText: { color: "#FF3B30", fontSize: 12, fontWeight: "600" },
-  tipBox: {
-    backgroundColor: "#0D1830",
-    borderRadius: 10,
-    padding: 12,
-    marginTop: 14,
-    marginBottom: 20,
-    borderLeftWidth: 3,
-    borderLeftColor: "#1DAB87",
+  imagePlaceholderText: { color: C.muted, fontSize: 14 },
+  removeImageBtn: { marginTop: 10, alignSelf: "flex-end" },
+
+  // Buttons
+  modalActions: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 28,
+    marginBottom: 32,
   },
-  tipText: { color: "#6A90B8", fontSize: 12, lineHeight: 18 },
+  primaryBtn: {
+    backgroundColor: C.text,
+    paddingVertical: 14,
+    paddingHorizontal: 22,
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  primaryText: { color: C.bg, fontSize: 15, fontWeight: "600" },
+  secondaryBtn: {
+    paddingVertical: 14,
+    paddingHorizontal: 22,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignItems: "center",
+  },
+  secondaryText: { color: C.muted, fontSize: 15, fontWeight: "600" },
+  disabled: { opacity: 0.6 },
 });

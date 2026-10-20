@@ -15,6 +15,9 @@ import AvailableVehiclesScreen from './src/screens/AvailableVehiclesScreen';
 import Accountscreen from './src/screens/AccountScreen';
 import BookingDetailScreen from './src/screens/Bookingdetailsscreen';
 import ChatScreen from "./src/screens/ChatScreen";
+import PackageDetailScreen from "./src/screens/PackageDetailScreen";
+import AdminPackagesScreen from "./src/screens/AdminPackagesScreen";
+import AdminHotelsScreen from "./src/screens/AdminHotelsScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -39,6 +42,9 @@ export default function App() {
         <Stack.Screen name="OwnerDashboard" component={OwnerDashboard} />
         <Stack.Screen name="AvailableVehiclesScreen" component={AvailableVehiclesScreen} />
         <Stack.Screen name="AddVehicle" component={AddVehicleScreen} />
+        <Stack.Screen name="PackageDetail" component={PackageDetailScreen} />
+        <Stack.Screen name="AdminPackages" component={AdminPackagesScreen} />
+        <Stack.Screen name="AdminHotels" component={AdminHotelsScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );
