@@ -18,15 +18,16 @@ import { collection, getDocs } from "firebase/firestore";
 // ==========================================
 // GEMINI CONFIG
 // ==========================================
-// NOTE: gemini-1.5-flash was deprecated and removed from the API,
-// which is what caused the 404. These are current model names.
-// Move this key to a backend before shipping the app.
-const GEMINI_API_KEY = "AIzaSyCKMLNoIiAq7Yi0DiLVOIyB4VBszGSFk_4";
+// The key now comes from your .env file:
+//   EXPO_PUBLIC_GEMINI_API_KEY=your-new-key-here
+// After editing .env, restart Expo with:  npx expo start -c
+const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
 
 const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash"];
 
+// The key is sent in a header instead of the URL so it doesn't show up in logs.
 const geminiUrl = (model) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
 export default function ChatScreen({ navigation }) {
   const [messages, setMessages] = useState([
@@ -113,10 +114,18 @@ export default function ChatScreen({ navigation }) {
   // Run the app once and read this log. If neither name in GEMINI_MODELS
   // appears here, replace them with one that does.
   useEffect(() => {
+    if (!GEMINI_API_KEY) {
+      console.warn(
+        "EXPO_PUBLIC_GEMINI_API_KEY is missing. Check your .env file and restart Expo with: npx expo start -c"
+      );
+      return;
+    }
+
     const listModels = async () => {
       try {
         const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`
+          "https://generativelanguage.googleapis.com/v1beta/models",
+          { headers: { "x-goog-api-key": GEMINI_API_KEY } }
         );
 
         const json = await res.json();
@@ -269,6 +278,12 @@ ${accommodationsText}
     setLoading(true);
 
     try {
+      if (!GEMINI_API_KEY) {
+        throw new Error(
+          "Missing EXPO_PUBLIC_GEMINI_API_KEY. Check your .env file and restart Expo with: npx expo start -c"
+        );
+      }
+
       // --------------------------------------
       // CHAT HISTORY
       // --------------------------------------
@@ -318,6 +333,7 @@ ${accommodationsText}
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            "x-goog-api-key": GEMINI_API_KEY,
           },
           body,
         });
