@@ -51,62 +51,75 @@ export default function ChatScreen({ navigation }) {
   // Caches the first model name that actually responds OK
   const workingModel = useRef(null);
 
+
+  
   // ==========================================
   // FETCH DATA FROM FIRESTORE
   // ==========================================
   useEffect(() => {
-    const fetchData = async () => {
+    let cancelled = false;
+
+    const fetchCollection = async (collectionName) => {
       try {
-        // -------------------------------
-        // TOURIST SPOTS
-        // -------------------------------
-        const spotsSnap = await getDocs(collection(db, "touristSpots"));
-
-        const spots = spotsSnap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        }));
-
-        setSpotsData(spots);
-
-        // -------------------------------
-        // VEHICLES
-        // -------------------------------
-        const vehiclesSnap = await getDocs(collection(db, "vehicles"));
-
-        const vehicles = vehiclesSnap.docs
-          .map((d) => ({
-            id: d.id,
-            ...d.data(),
-          }))
-          .filter((v) => v.isAvailable === true);
-
-        setVehiclesData(vehicles);
-
-        // -------------------------------
-        // ACCOMMODATIONS
-        // -------------------------------
-        const accommodationsSnap = await getDocs(
-          collection(db, "accommodations")
+        const snapshot = await getDocs(
+          collection(db, collectionName)
         );
 
-        const accommodations = accommodationsSnap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
+        const data = snapshot.docs.map((document) => ({
+          id: document.id,
+          ...document.data(),
         }));
 
-        setAccommodationsData(accommodations);
+        console.log(
+          `[Chatbot] ${collectionName}: ${data.length} documents loaded`
+        );
 
-        console.log("Tourist spots:", spots.length);
-        console.log("Available vehicles:", vehicles.length);
-        console.log("Accommodations:", accommodations.length);
+        return data;
       } catch (error) {
-        console.error("Error fetching data for chatbot:", error);
+        console.error(
+          `[Chatbot] Failed to fetch "${collectionName}":`,
+          error.code || "unknown-error",
+          error.message
+        );
+
+        return null;
+      }
+    };
+
+    const fetchData = async () => {
+      const [spots, vehicles, accommodations] =
+        await Promise.all([
+          fetchCollection("touristSpots"),
+          fetchCollection("vehicles"),
+          fetchCollection("accommodations"),
+        ]);
+
+      if (cancelled) return;
+
+      if (spots !== null) {
+        setSpotsData(spots);
+      }
+
+      if (vehicles !== null) {
+        setVehiclesData(
+          vehicles.filter(
+            (vehicle) => vehicle.isAvailable === true
+          )
+        );
+      }
+
+      if (accommodations !== null) {
+        setAccommodationsData(accommodations);
       }
     };
 
     fetchData();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
 
   // ==========================================
   // LOG MODELS THIS API KEY CAN ACTUALLY USE

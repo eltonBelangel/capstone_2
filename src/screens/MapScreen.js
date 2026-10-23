@@ -1,8 +1,22 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
-  View, Text, ScrollView, TextInput, Image,
-  TouchableOpacity, StyleSheet, FlatList, Alert, ActivityIndicator,
-  PanResponder, Animated, Linking, Modal, Dimensions, Pressable,
+  View,
+  Text,
+  ScrollView,
+  TextInput,
+  Image,
+  TouchableOpacity,
+  StyleSheet,
+  FlatList,
+  Alert,
+  ActivityIndicator,
+  PanResponder,
+  Animated,
+  Linking,
+  Modal,
+  Pressable,
+  StatusBar,
+  Platform,
 } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import * as Location from "expo-location";
@@ -10,24 +24,27 @@ import { auth, db } from "../../firebaseConfig";
 import { collection, onSnapshot, doc, getDoc } from "firebase/firestore";
 import { TOURISM_OFFICE } from "../constants/tourismOffice";
 
-const { width: SCREEN_W } = Dimensions.get("window");
 const RADIUS_KM = 80;
 
-const COLORS = {
-  bg: "#F4F6FB",
-  surface: "#FFFFFF",
-  primary: "#2563EB",
-  primaryDark: "#1E40AF",
-  accent: "#10B981",
-  accentSoft: "#ECFDF5",
-  purple: "#7C3AED",
-  purpleSoft: "#F3E8FF",
-  text: "#0F172A",
-  textSecondary: "#64748B",
-  textMuted: "#94A3B8",
-  border: "#E2E8F0",
-  danger: "#EF4444",
-  navy: "#0B1220",
+// Palette
+const C = {
+  bg: "#0E1116",
+  surface: "#151A21",
+  border: "#232A33",
+  text: "#E8EAED",
+  muted: "#8A929E",
+  faint: "#566070",
+  danger: "#E5736B",
+  warn: "#D9A441",
+  ok: "#4CAF86",
+};
+
+const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+const statusColor = (s) => {
+  if (s === "limited") return C.warn;
+  if (s === "full") return C.danger;
+  return C.ok;
 };
 
 const getDistanceKm = (lat1, lon1, lat2, lon2) => {
@@ -41,17 +58,29 @@ const getDistanceKm = (lat1, lon1, lat2, lon2) => {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-function ScalePressable({ children, onPress, style, activeOpacity = 0.92 }) {
+function ScalePressable({ children, onPress, style }) {
   const scale = useRef(new Animated.Value(1)).current;
   const onPressIn = () => {
-    Animated.spring(scale, { toValue: 0.96, useNativeDriver: true, speed: 40, bounciness: 4 }).start();
+    Animated.spring(scale, {
+      toValue: 0.97,
+      useNativeDriver: true,
+      speed: 40,
+      bounciness: 2,
+    }).start();
   };
   const onPressOut = () => {
-    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 40, bounciness: 6 }).start();
+    Animated.spring(scale, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 40,
+      bounciness: 4,
+    }).start();
   };
   return (
     <Pressable onPress={onPress} onPressIn={onPressIn} onPressOut={onPressOut}>
-      <Animated.View style={[style, { transform: [{ scale }] }]}>{children}</Animated.View>
+      <Animated.View style={[style, { transform: [{ scale }] }]}>
+        {children}
+      </Animated.View>
     </Pressable>
   );
 }
@@ -71,23 +100,22 @@ export default function MapScreen({ navigation }) {
   const [hotels, setHotels] = useState([]);
   const [mapExpanded, setMapExpanded] = useState(false);
 
-  const modalSlide = useRef(new Animated.Value(400)).current;
+  const modalSlide = useRef(new Animated.Value(420)).current;
   const modalOpacity = useRef(new Animated.Value(0)).current;
   const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const currentOffset = useRef({ x: 0, y: 0 });
-  const dragDistance = useRef(0);
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+      // Let the button handle taps; only take over once the finger really drags
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gs) =>
+        Math.abs(gs.dx) > 6 || Math.abs(gs.dy) > 6,
       onPanResponderGrant: () => {
-        dragDistance.current = 0;
         pan.setOffset({ x: currentOffset.current.x, y: currentOffset.current.y });
         pan.setValue({ x: 0, y: 0 });
       },
       onPanResponderMove: (_, gs) => {
-        dragDistance.current = Math.sqrt(gs.dx * gs.dx + gs.dy * gs.dy);
         pan.setValue({ x: gs.dx, y: gs.dy });
       },
       onPanResponderRelease: (_, gs) => {
@@ -100,13 +128,53 @@ export default function MapScreen({ navigation }) {
     })
   ).current;
 
+  // Location: never crashes, always ends with a usable position
   useEffect(() => {
+    let cancelled = false;
+
+    // Used when location is denied, off, or unavailable (e.g. emulator with no fix)
+    const fallback = {
+      latitude: TOURISM_OFFICE.latitude,
+      longitude: TOURISM_OFFICE.longitude,
+    };
+
+    const finish = (coords) => {
+      if (!cancelled) setUserLocation(coords);
+    };
+
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") return;
-      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setUserLocation({ latitude: location.coords.latitude, longitude: location.coords.longitude });
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") return finish(fallback);
+
+        try {
+          const pos = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          return finish({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          });
+        } catch {
+          // No fresh fix: try the last known position before giving up
+          const last = await Location.getLastKnownPositionAsync();
+          if (last) {
+            return finish({
+              latitude: last.coords.latitude,
+              longitude: last.coords.longitude,
+            });
+          }
+          return finish(fallback);
+        }
+      } catch (e) {
+        console.warn("Location unavailable:", e?.message);
+        finish(fallback);
+      }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -215,8 +283,17 @@ export default function MapScreen({ navigation }) {
     modalSlide.setValue(420);
     modalOpacity.setValue(0);
     Animated.parallel([
-      Animated.spring(modalSlide, { toValue: 0, useNativeDriver: true, speed: 18, bounciness: 6 }),
-      Animated.timing(modalOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
+      Animated.spring(modalSlide, {
+        toValue: 0,
+        useNativeDriver: true,
+        speed: 18,
+        bounciness: 4,
+      }),
+      Animated.timing(modalOpacity, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }),
     ]).start();
   };
 
@@ -227,41 +304,46 @@ export default function MapScreen({ navigation }) {
     ]).start(() => setSelectedSpot(null));
   };
 
+  const openDirections = (lat, lng) => {
+    Linking.openURL(
+      `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`
+    );
+  };
+
   const openHotelBooking = (hotel) => {
     if (hotel.externalBookingUrl) {
       Linking.openURL(hotel.externalBookingUrl);
       return;
     }
+    const lines = [
+      hotel.description || "Partner hotel",
+      hotel.phone ? `Phone: ${hotel.phone}` : null,
+      hotel.address ? `Address: ${hotel.address}` : null,
+      `Availability: ${cap(hotel.availabilityStatus || "available")}`,
+      hotel.dotAccredited ? "DOT accredited" : null,
+    ].filter(Boolean);
+
     Alert.alert(
       hotel.name,
-      (hotel.description || "Partner hotel") +
-        (hotel.phone ? "\n\n📞 " + hotel.phone : "") +
-        (hotel.address ? "\n📍 " + hotel.address : "") +
-        "\n\nStatus: " + (hotel.availabilityStatus || "available").toUpperCase() +
-        (hotel.dotAccredited ? "\n✅ DOT Accredited" : ""),
+      lines.join("\n"),
       [
         { text: "Close", style: "cancel" },
         hotel.location?.lat
           ? {
               text: "Directions",
-              onPress: () =>
-                Linking.openURL(
-                  `https://www.google.com/maps/dir/?api=1&destination=${hotel.location.lat},${hotel.location.lng}&travelmode=driving`
-                ),
+              onPress: () => openDirections(hotel.location.lat, hotel.location.lng),
             }
           : null,
       ].filter(Boolean)
     );
   };
 
-  const openTourismOfficeDirections = () => {
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${TOURISM_OFFICE.latitude},${TOURISM_OFFICE.longitude}&travelmode=driving`;
-    Linking.openURL(url);
-  };
+  const openTourismOfficeDirections = () =>
+    openDirections(TOURISM_OFFICE.latitude, TOURISM_OFFICE.longitude);
 
   const handleGoToPayment = (vehicle) => {
     if (!auth.currentUser) {
-      Alert.alert("Login required", "Please log in to rent a vehicle.");
+      Alert.alert("Login required", "Log in to rent a vehicle.");
       return;
     }
     navigation.navigate("Payment", {
@@ -281,37 +363,36 @@ export default function MapScreen({ navigation }) {
             item.latitude,
             item.longitude
           ).toFixed(1)
-        : "—";
+        : null;
     const pkgCount = allPackages.filter((p) => p.spotId === item.id).length;
+    const meta = [item.category, distance ? `${distance} km` : null]
+      .filter(Boolean)
+      .join("   ");
 
     return (
-      <ScalePressable onPress={() => openSpotPackages(item)} style={[styles.spotCard, { marginLeft: index === 0 ? 20 : 0 }]}>
-        <View style={styles.spotImageWrap}>
-          {item.imageUrl ? (
-            <Image source={{ uri: item.imageUrl }} style={styles.spotImage} resizeMode="cover" />
-          ) : (
-            <View style={[styles.spotImage, styles.spotImagePlaceholder]}>
-              <Text style={{ fontSize: 40 }}>🏝️</Text>
-            </View>
-          )}
-          <View style={styles.distancePill}>
-            <Text style={styles.distancePillText}>{distance} km</Text>
-          </View>
-          {pkgCount > 0 && (
-            <View style={styles.pkgPill}>
-              <Text style={styles.pkgPillText}>🎒 {pkgCount}</Text>
-            </View>
-          )}
-        </View>
-        <Text style={styles.spotName} numberOfLines={1}>{item.name}</Text>
-        {item.category ? (
-          <Text style={styles.spotCategory} numberOfLines={1}>{item.category}</Text>
-        ) : null}
-        <View style={styles.spotCta}>
-          <Text style={styles.spotCtaText}>
-            {pkgCount > 0 ? "View packages" : "View spot"}
+      <ScalePressable
+        onPress={() => openSpotPackages(item)}
+        style={[styles.card, styles.spotCard, { marginLeft: index === 0 ? 24 : 0 }]}
+      >
+        {item.imageUrl ? (
+          <Image source={{ uri: item.imageUrl }} style={styles.spotImage} resizeMode="cover" />
+        ) : (
+          <View style={[styles.spotImage, styles.imagePlaceholder]} />
+        )}
+        <View style={styles.cardBody}>
+          <Text style={styles.cardTitle} numberOfLines={1}>
+            {item.name}
           </Text>
-          <Text style={styles.spotCtaArrow}>→</Text>
+          {meta ? (
+            <Text style={styles.cardMeta} numberOfLines={1}>
+              {meta}
+            </Text>
+          ) : null}
+          <Text style={styles.cardAction}>
+            {pkgCount > 0
+              ? `${pkgCount} ${pkgCount === 1 ? "package" : "packages"}`
+              : "View spot"}
+          </Text>
         </View>
       </ScalePressable>
     );
@@ -327,27 +408,27 @@ export default function MapScreen({ navigation }) {
     return (
       <ScalePressable
         onPress={() => handleGoToPayment(item)}
-        style={[styles.vehicleCard, { marginLeft: index === 0 ? 20 : 0 }]}
+        style={[styles.card, styles.vehicleCard, { marginLeft: index === 0 ? 24 : 0 }]}
       >
         {item.imageUrl ? (
           <Image source={{ uri: item.imageUrl }} style={styles.vehicleImage} resizeMode="cover" />
         ) : (
-          <View style={[styles.vehicleImage, styles.vehicleImagePlaceholder]}>
-            <Text style={{ fontSize: 28 }}>🚗</Text>
-          </View>
+          <View style={[styles.vehicleImage, styles.imagePlaceholder]} />
         )}
-        <Text style={styles.vehicleTitle} numberOfLines={1}>
-          {(item.category || "Vehicle").replace("_", " ")}
-        </Text>
-        {item.model ? <Text style={styles.vehicleSub} numberOfLines={1}>{item.model}</Text> : null}
-        <View style={styles.vehicleFooter}>
-          {item.price ? (
-            <Text style={styles.vehiclePrice}>₱{item.price}</Text>
-          ) : (
-            <Text style={styles.vehicleSub}>{distance} km</Text>
-          )}
-          <View style={styles.rentChip}>
-            <Text style={styles.rentChipText}>Rent</Text>
+        <View style={styles.cardBody}>
+          <Text style={styles.cardTitle} numberOfLines={1}>
+            {cap((item.category || "Vehicle").replace("_", " "))}
+          </Text>
+          <Text style={styles.cardMeta} numberOfLines={1}>
+            {[item.model, `${distance} km`].filter(Boolean).join("   ")}
+          </Text>
+          <View style={styles.vehicleFooter}>
+            {item.price ? (
+              <Text style={styles.price}>₱{item.price}</Text>
+            ) : (
+              <View />
+            )}
+            <Text style={styles.cardAction}>Rent</Text>
           </View>
         </View>
       </ScalePressable>
@@ -357,34 +438,33 @@ export default function MapScreen({ navigation }) {
   if (!userLocation) {
     return (
       <View style={[styles.container, styles.centered]}>
-        <View style={styles.loaderRing}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-        </View>
-        <Text style={styles.loaderText}>Finding your location…</Text>
+        <ActivityIndicator color={C.muted} />
+        <Text style={styles.loaderText}>Finding your location</Text>
       </View>
     );
   }
 
-  const mapHeight = mapExpanded ? 360 : 210;
+  const mapHeight = mapExpanded ? 360 : 220;
+  const initial = renterInfo?.username
+    ? renterInfo.username.charAt(0).toUpperCase()
+    : "U";
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+
       {/* Header */}
       <View style={styles.header}>
         <View>
           <Text style={styles.brand}>TouraMove</Text>
-          <Text style={styles.brandSub}>Explore · Ride · Discover</Text>
+          <Text style={styles.brandSub}>Explore, ride, discover</Text>
         </View>
         <TouchableOpacity
-          style={styles.avatarBtn}
+          style={styles.avatar}
           onPress={() => navigation.navigate("Account")}
-          activeOpacity={0.85}
+          activeOpacity={0.7}
         >
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {renterInfo?.username ? renterInfo.username.charAt(0).toUpperCase() : "👤"}
-            </Text>
-          </View>
+          <Text style={styles.avatarText}>{initial}</Text>
         </TouchableOpacity>
       </View>
 
@@ -420,17 +500,16 @@ export default function MapScreen({ navigation }) {
         </MapView>
 
         <View style={styles.searchBar}>
-          <Text style={styles.searchIcon}>🔍</Text>
           <TextInput
-            placeholder="Search beaches, islands, spots…"
-            placeholderTextColor={COLORS.textMuted}
+            placeholder="Search spots and categories"
+            placeholderTextColor={C.faint}
             value={searchQuery}
             onChangeText={setSearchQuery}
             style={styles.searchInput}
           />
           {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery("")}>
-              <Text style={styles.clearSearch}>✕</Text>
+            <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={8}>
+              <Text style={styles.clearSearch}>Clear</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -438,75 +517,93 @@ export default function MapScreen({ navigation }) {
         <TouchableOpacity
           style={styles.expandMapBtn}
           onPress={() => setMapExpanded((v) => !v)}
-          activeOpacity={0.9}
+          activeOpacity={0.8}
         >
-          <Text style={styles.expandMapText}>{mapExpanded ? "Collapse" : "Expand map"}</Text>
+          <Text style={styles.expandMapText}>
+            {mapExpanded ? "Collapse" : "Expand"}
+          </Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={{ paddingBottom: 100 }}
+        contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Tourism Office */}
-        <Text style={styles.sectionLabel}>Official help</Text>
-        <ScalePressable onPress={openTourismOfficeDirections} style={styles.tourismCard}>
-          <View style={styles.tourismIcon}>
-            <Text style={{ fontSize: 26 }}>🏛️</Text>
+        {/* Tourism office */}
+        <Text style={styles.sectionTitle}>Official help</Text>
+        <TouchableOpacity
+          style={styles.officeRow}
+          onPress={openTourismOfficeDirections}
+          activeOpacity={0.6}
+        >
+          <View style={styles.flex}>
+            <Text style={styles.cardTitle}>{TOURISM_OFFICE.name}</Text>
+            <Text style={styles.cardMeta} numberOfLines={1}>
+              {TOURISM_OFFICE.address}
+            </Text>
+            <Text style={styles.cardMeta}>{TOURISM_OFFICE.hours}</Text>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.tourismTitle}>{TOURISM_OFFICE.name}</Text>
-            <Text style={styles.tourismAddr} numberOfLines={1}>{TOURISM_OFFICE.address}</Text>
-            <Text style={styles.tourismHours}>{TOURISM_OFFICE.hours}</Text>
-          </View>
-          <View style={styles.tourismArrow}>
-            <Text style={{ color: COLORS.purple, fontSize: 18 }}>↗</Text>
-          </View>
-        </ScalePressable>
+          <Text style={styles.linkText}>Directions</Text>
+        </TouchableOpacity>
 
-        {/* Partner Hotels */}
+        {/* Partner hotels */}
         <View style={styles.sectionRow}>
-          <Text style={styles.sectionLabel}>Partner hotels</Text>
+          <Text style={styles.sectionTitleInline}>Partner hotels</Text>
           <Text style={styles.sectionCount}>{hotels.length}</Text>
         </View>
-        <Text style={styles.sectionHint}>Tap to book via hotel system or view details</Text>
+        <Text style={styles.sectionHint}>
+          Book through the hotel's own system or view details
+        </Text>
         {hotels.length === 0 ? (
-          <View style={styles.emptyBox}>
-            <Text style={styles.emptyEmoji}>🏨</Text>
-            <Text style={styles.emptyText}>No partner hotels yet</Text>
-          </View>
+          <Text style={styles.emptyText}>No partner hotels yet.</Text>
         ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 20 }}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.hScroll}
+          >
             {hotels.map((hotel, index) => {
               const status = hotel.availabilityStatus || "available";
-              const statusColor = status === "available" ? "#10B981" : status === "limited" ? "#F59E0B" : "#EF4444";
               return (
                 <ScalePressable
                   key={hotel.id}
                   onPress={() => openHotelBooking(hotel)}
-                  style={[styles.hotelCard, { marginLeft: index === 0 ? 20 : 0 }]}
+                  style={[
+                    styles.card,
+                    styles.hotelCard,
+                    { marginLeft: index === 0 ? 24 : 0 },
+                  ]}
                 >
-                  <View style={styles.hotelIconRow}>
-                    <Text style={{ fontSize: 28 }}>🏨</Text>
-                    {hotel.dotAccredited ? (
-                      <View style={styles.dotPill}><Text style={styles.dotPillText}>DOT</Text></View>
-                    ) : null}
-                  </View>
-                  <Text style={styles.hotelName} numberOfLines={1}>{hotel.name}</Text>
-                  <Text style={styles.hotelAddr} numberOfLines={1}>{hotel.address || "Partner hotel"}</Text>
-                  <View style={styles.hotelFooter}>
-                    <View style={[styles.hotelStatus, { backgroundColor: statusColor + "22" }]}>
-                      <View style={[styles.hotelStatusDot, { backgroundColor: statusColor }]} />
-                      <Text style={[styles.hotelStatusText, { color: statusColor }]}>{status}</Text>
+                  <View style={styles.cardBody}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>
+                      {hotel.name}
+                    </Text>
+                    <Text style={styles.cardMeta} numberOfLines={1}>
+                      {hotel.address || "Partner hotel"}
+                    </Text>
+                    <View style={styles.statusLine}>
+                      <View
+                        style={[styles.dot, { backgroundColor: statusColor(status) }]}
+                      />
+                      <Text style={styles.cardMeta}>{cap(status)}</Text>
+                      {hotel.dotAccredited ? (
+                        <Text style={styles.cardMeta}>   DOT accredited</Text>
+                      ) : null}
                     </View>
-                    {hotel.priceFrom ? (
-                      <Text style={styles.hotelPrice}>₱{Number(hotel.priceFrom).toLocaleString()}+</Text>
-                    ) : null}
+                    <View style={styles.hotelFooter}>
+                      {hotel.priceFrom ? (
+                        <Text style={styles.price}>
+                          From ₱{Number(hotel.priceFrom).toLocaleString()}
+                        </Text>
+                      ) : (
+                        <View />
+                      )}
+                      <Text style={styles.cardAction}>
+                        {hotel.externalBookingUrl ? "Book" : "Details"}
+                      </Text>
+                    </View>
                   </View>
-                  <Text style={styles.hotelCta}>
-                    {hotel.externalBookingUrl ? "Book on hotel site →" : "View details →"}
-                  </Text>
                 </ScalePressable>
               );
             })}
@@ -515,18 +612,15 @@ export default function MapScreen({ navigation }) {
 
         {/* Spots */}
         <View style={styles.sectionRow}>
-          <Text style={styles.sectionLabel}>Tourist spots near you</Text>
+          <Text style={styles.sectionTitleInline}>Spots near you</Text>
           <Text style={styles.sectionCount}>{filteredSpots.length}</Text>
         </View>
         <Text style={styles.sectionHint}>Tap a spot to see trip packages</Text>
 
         {spotsLoading ? (
-          <ActivityIndicator color={COLORS.primary} style={{ marginVertical: 20 }} />
+          <ActivityIndicator color={C.muted} style={styles.loader} />
         ) : filteredSpots.length === 0 ? (
-          <View style={styles.emptyBox}>
-            <Text style={styles.emptyEmoji}>🗺️</Text>
-            <Text style={styles.emptyText}>No spots nearby yet</Text>
-          </View>
+          <Text style={styles.emptyText}>No spots nearby yet.</Text>
         ) : (
           <FlatList
             data={filteredSpots}
@@ -534,22 +628,19 @@ export default function MapScreen({ navigation }) {
             keyExtractor={(item) => item.id.toString()}
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingRight: 20 }}
+            contentContainerStyle={styles.hScroll}
           />
         )}
 
         {/* Vehicles */}
-        <View style={[styles.sectionRow, { marginTop: 28 }]}>
-          <Text style={styles.sectionLabel}>Vehicles nearby</Text>
+        <View style={styles.sectionRow}>
+          <Text style={styles.sectionTitleInline}>Vehicles nearby</Text>
           <Text style={styles.sectionCount}>{nearbyVehicles.length}</Text>
         </View>
-        <Text style={styles.sectionHint}>Direct rent · also used by trip packages</Text>
+        <Text style={styles.sectionHint}>Rent directly, or as part of a package</Text>
 
         {nearbyVehicles.length === 0 ? (
-          <View style={styles.emptyBox}>
-            <Text style={styles.emptyEmoji}>🚗</Text>
-            <Text style={styles.emptyText}>No vehicles online right now</Text>
-          </View>
+          <Text style={styles.emptyText}>No vehicles online right now.</Text>
         ) : (
           <FlatList
             data={nearbyVehicles}
@@ -557,120 +648,133 @@ export default function MapScreen({ navigation }) {
             keyExtractor={(item) => item.id}
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingRight: 20, paddingBottom: 8 }}
+            contentContainerStyle={styles.hScroll}
           />
         )}
       </ScrollView>
 
       {/* Packages bottom sheet */}
-      <Modal visible={!!selectedSpot} transparent animationType="none" onRequestClose={closeSpotModal}>
+      <Modal
+        visible={!!selectedSpot}
+        transparent
+        animationType="none"
+        onRequestClose={closeSpotModal}
+      >
         <Animated.View style={[styles.modalBackdrop, { opacity: modalOpacity }]}>
-          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={closeSpotModal} />
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={closeSpotModal}
+          />
         </Animated.View>
-        <Animated.View
-          style={[
-            styles.sheet,
-            { transform: [{ translateY: modalSlide }] },
-          ]}
-        >
-          <View style={styles.sheetHandle} />
+        <Animated.View style={[styles.sheet, { transform: [{ translateY: modalSlide }] }]}>
           <View style={styles.sheetHeader}>
-            <View style={{ flex: 1 }}>
+            <View style={styles.flex}>
               <Text style={styles.sheetTitle} numberOfLines={1}>
                 {selectedSpot?.name}
               </Text>
-              <Text style={styles.sheetSub}>Trip packages</Text>
+              <Text style={styles.cardMeta}>Trip packages</Text>
             </View>
-            <TouchableOpacity style={styles.sheetClose} onPress={closeSpotModal}>
-              <Text style={styles.sheetCloseText}>✕</Text>
+            <TouchableOpacity onPress={closeSpotModal} hitSlop={8}>
+              <Text style={styles.headerLink}>Close</Text>
             </TouchableOpacity>
           </View>
 
           {selectedSpot?.description ? (
-            <Text style={styles.sheetDesc} numberOfLines={3}>{selectedSpot.description}</Text>
+            <Text style={styles.sheetDesc} numberOfLines={3}>
+              {selectedSpot.description}
+            </Text>
           ) : null}
 
           {spotPackages.length === 0 ? (
-            <View style={styles.noPkgBox}>
-              <Text style={{ fontSize: 32, marginBottom: 8 }}>🎒</Text>
-              <Text style={styles.noPkgTitle}>No packages yet</Text>
-              <Text style={styles.noPkgSub}>Admin can add multi-leg trips for this spot.</Text>
+            <View style={styles.noPkg}>
+              <Text style={styles.cardTitle}>No packages yet</Text>
+              <Text style={styles.cardMeta}>
+                Trip packages for this spot will appear here.
+              </Text>
             </View>
           ) : (
-            <ScrollView style={{ maxHeight: 340 }} showsVerticalScrollIndicator={false}>
+            <ScrollView style={styles.pkgList} showsVerticalScrollIndicator={false}>
               {spotPackages.map((pkg) => {
                 const total =
                   pkg.totalPrice ||
-                  (pkg.legs || []).reduce((s, l) => s + (Number(l.estimatedPrice) || 0), 0);
+                  pkg.price ||
+                  (pkg.legs || []).reduce(
+                    (s, l) => s + (Number(l.estimatedPrice) || 0),
+                    0
+                  );
                 const legCount = (pkg.legs || []).length;
+                const meta = [
+                  `${legCount} leg${legCount !== 1 ? "s" : ""}`,
+                  pkg.roundTrip ? "Round trip" : null,
+                  pkg.durationEstimate || pkg.duration || null,
+                ]
+                  .filter(Boolean)
+                  .join("   ");
+                const vehicles = (pkg.legs || [])
+                  .map((l) => cap(l.vehicleType || "ride"))
+                  .join(", ");
                 return (
-                  <ScalePressable
+                  <TouchableOpacity
                     key={pkg.id}
-                    style={styles.pkgCard}
+                    style={styles.pkgRow}
+                    activeOpacity={0.6}
                     onPress={() => {
                       closeSpotModal();
                       setTimeout(() => {
-                        navigation.navigate("PackageDetail", { package: pkg, spot: selectedSpot });
+                        navigation.navigate("PackageDetail", {
+                          package: pkg,
+                          spot: selectedSpot,
+                        });
                       }, 220);
                     }}
                   >
-                    <View style={styles.pkgCardTop}>
-                      <Text style={styles.pkgName} numberOfLines={1}>{pkg.name}</Text>
-                      <Text style={styles.pkgPrice}>₱{Number(total).toLocaleString()}</Text>
-                    </View>
-                    <Text style={styles.pkgMeta}>
-                      {legCount} leg{legCount !== 1 ? "s" : ""}
-                      {pkg.roundTrip ? "  ·  Round trip" : ""}
-                      {pkg.durationEstimate ? `  ·  ${pkg.durationEstimate}` : ""}
-                    </Text>
-                    <View style={styles.legChips}>
-                      {(pkg.legs || []).slice(0, 4).map((leg, i) => (
-                        <View key={i} style={styles.legChip}>
-                          <Text style={styles.legChipText}>
-                            {(leg.vehicleType || "ride").toUpperCase()}
-                          </Text>
-                        </View>
-                      ))}
-                      {(pkg.legs || []).length > 4 && (
-                        <View style={styles.legChip}>
-                          <Text style={styles.legChipText}>+{(pkg.legs || []).length - 4}</Text>
-                        </View>
+                    <View style={styles.pkgTop}>
+                      <Text style={[styles.cardTitle, styles.flex]} numberOfLines={1}>
+                        {pkg.name}
+                      </Text>
+                      {Number(total) > 0 && (
+                        <Text style={styles.price}>
+                          ₱{Number(total).toLocaleString()}
+                        </Text>
                       )}
                     </View>
-                    <Text style={styles.pkgTap}>View itinerary & book →</Text>
-                  </ScalePressable>
+                    <Text style={styles.cardMeta}>{meta}</Text>
+                    {vehicles ? (
+                      <Text style={styles.cardMeta} numberOfLines={1}>
+                        {vehicles}
+                      </Text>
+                    ) : null}
+                    <Text style={styles.linkText}>View itinerary and book</Text>
+                  </TouchableOpacity>
                 );
               })}
             </ScrollView>
           )}
 
           <TouchableOpacity
-            style={styles.directionsBtn}
+            style={styles.primaryBtn}
             onPress={() => {
               if (!selectedSpot) return;
-              Linking.openURL(
-                `https://www.google.com/maps/dir/?api=1&destination=${selectedSpot.latitude},${selectedSpot.longitude}&travelmode=driving`
-              );
+              openDirections(selectedSpot.latitude, selectedSpot.longitude);
             }}
           >
-            <Text style={styles.directionsBtnText}>📍  Directions to this spot</Text>
+            <Text style={styles.primaryText}>Directions to this spot</Text>
           </TouchableOpacity>
         </Animated.View>
       </Modal>
 
-      {/* Chat FAB */}
+      {/* Chat button (draggable) */}
       <Animated.View
         style={[styles.fab, { transform: [{ translateX: pan.x }, { translateY: pan.y }] }]}
         {...panResponder.panHandlers}
       >
         <TouchableOpacity
           style={styles.fabInner}
-          activeOpacity={0.9}
-          onPress={() => {
-            if (dragDistance.current < 8) navigation.navigate("Chat");
-          }}
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate("Chat")}
         >
-          <Text style={{ fontSize: 24 }}>💬</Text>
+          <Text style={styles.fabText}>Chat</Text>
         </TouchableOpacity>
       </Animated.View>
     </View>
@@ -678,391 +782,219 @@ export default function MapScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.bg },
+  flex: { flex: 1 },
+  container: { flex: 1, backgroundColor: C.bg },
   centered: { justifyContent: "center", alignItems: "center" },
-  loaderRing: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: "#EFF6FF",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 14,
-  },
-  loaderText: { color: COLORS.textSecondary, fontSize: 14 },
+  loaderText: { color: C.muted, fontSize: 14, marginTop: 12 },
+  loader: { marginVertical: 20 },
 
+  // Header
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 20,
-    paddingTop: 52,
+    paddingHorizontal: 24,
+    paddingTop:
+      Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 16 : 56,
     paddingBottom: 14,
-    backgroundColor: COLORS.navy,
   },
-  brand: { fontSize: 24, fontWeight: "800", color: "#fff", letterSpacing: -0.5 },
-  brandSub: { fontSize: 12, color: "#94A3B8", marginTop: 2, fontWeight: "500" },
-  avatarBtn: { padding: 2 },
+  brand: {
+    fontSize: 26,
+    fontWeight: "700",
+    color: C.text,
+    letterSpacing: -0.5,
+  },
+  brandSub: { fontSize: 13, color: C.muted, marginTop: 2 },
   avatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: COLORS.primary,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface,
     justifyContent: "center",
     alignItems: "center",
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.25)",
   },
-  avatarText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  avatarText: { color: C.text, fontWeight: "600", fontSize: 15 },
+  headerLink: { color: C.muted, fontSize: 15 },
 
+  // Map
   mapWrap: {
-    marginHorizontal: 16,
-    marginTop: 14,
-    borderRadius: 20,
+    marginHorizontal: 24,
+    borderRadius: 12,
     overflow: "hidden",
-    backgroundColor: "#E2E8F0",
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.border,
   },
   searchBar: {
     position: "absolute",
-    top: 12,
-    left: 12,
-    right: 12,
+    top: 10,
+    left: 10,
+    right: 10,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.97)",
-    borderRadius: 14,
-    paddingHorizontal: 12,
+    backgroundColor: C.surface,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingHorizontal: 14,
     paddingVertical: 10,
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
   },
-  searchIcon: { fontSize: 14, marginRight: 8 },
-  searchInput: { flex: 1, fontSize: 14, color: COLORS.text, padding: 0 },
-  clearSearch: { color: COLORS.textMuted, fontSize: 14, paddingHorizontal: 4 },
+  searchInput: { flex: 1, fontSize: 15, color: C.text, padding: 0 },
+  clearSearch: { color: C.muted, fontSize: 13, fontWeight: "500", paddingLeft: 10 },
   expandMapBtn: {
     position: "absolute",
-    bottom: 12,
-    right: 12,
-    backgroundColor: "rgba(15,23,42,0.82)",
+    bottom: 10,
+    right: 10,
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.border,
     paddingHorizontal: 12,
     paddingVertical: 7,
-    borderRadius: 20,
+    borderRadius: 8,
   },
-  expandMapText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  expandMapText: { color: C.text, fontSize: 12, fontWeight: "600" },
 
+  // Sections
   scroll: { flex: 1, marginTop: 8 },
-  sectionLabel: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: COLORS.text,
-    marginLeft: 20,
-    marginTop: 18,
-    letterSpacing: -0.2,
+  scrollContent: { paddingBottom: 120 },
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: C.text,
+    marginLeft: 24,
+    marginTop: 20,
   },
   sectionRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginLeft: 20,
-    marginTop: 22,
-    marginRight: 20,
+    marginHorizontal: 24,
+    marginTop: 32,
   },
-  sectionCount: {
-    marginLeft: 8,
-    backgroundColor: "#E0E7FF",
-    color: COLORS.primaryDark,
-    fontSize: 12,
-    fontWeight: "700",
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
+  sectionTitleInline: { fontSize: 17, fontWeight: "600", color: C.text },
+  sectionCount: { marginLeft: 8, color: C.muted, fontSize: 15 },
+  sectionHint: {
+    fontSize: 13,
+    color: C.muted,
+    marginHorizontal: 24,
+    marginTop: 3,
+    marginBottom: 14,
+  },
+  emptyText: { color: C.muted, fontSize: 14, marginHorizontal: 24 },
+  hScroll: { paddingRight: 24 },
+
+  // Office
+  officeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginHorizontal: 24,
+    marginTop: 12,
+    paddingVertical: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: C.border,
+  },
+  linkText: { color: C.text, fontSize: 14, fontWeight: "600", marginLeft: 16 },
+
+  // Cards
+  card: {
+    backgroundColor: C.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    marginRight: 12,
     overflow: "hidden",
   },
-  sectionHint: {
-    fontSize: 12,
-    color: COLORS.textMuted,
-    marginLeft: 20,
-    marginBottom: 12,
-    marginTop: 2,
-  },
+  cardBody: { padding: 14 },
+  cardTitle: { color: C.text, fontSize: 15, fontWeight: "600" },
+  cardMeta: { color: C.muted, fontSize: 13, marginTop: 3 },
+  cardAction: { color: C.text, fontSize: 13, fontWeight: "600", marginTop: 10 },
+  price: { color: C.text, fontSize: 15, fontWeight: "600" },
+  imagePlaceholder: { backgroundColor: C.bg },
 
-  tourismCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginHorizontal: 20,
-    marginTop: 10,
-    backgroundColor: COLORS.surface,
-    borderRadius: 18,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: "#EDE9FE",
-    shadowColor: COLORS.purple,
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
-  },
-  tourismIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: COLORS.purpleSoft,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 12,
-  },
-  tourismTitle: { fontSize: 15, fontWeight: "700", color: COLORS.text },
-  tourismAddr: { fontSize: 12, color: COLORS.textSecondary, marginTop: 2 },
-  tourismHours: { fontSize: 11, color: COLORS.textMuted, marginTop: 2 },
-  tourismArrow: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: COLORS.purpleSoft,
-    justifyContent: "center",
-    alignItems: "center",
-  },
+  spotCard: { width: 200 },
+  spotImage: { width: "100%", height: 112 },
 
-  spotCard: {
-    width: 196,
-    backgroundColor: COLORS.surface,
-    borderRadius: 18,
-    marginRight: 12,
-    padding: 10,
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.07,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
-  },
-  spotImageWrap: { position: "relative", marginBottom: 10 },
-  spotImage: { width: "100%", height: 118, borderRadius: 14 },
-  spotImagePlaceholder: {
-    backgroundColor: "#EEF2FF",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  distancePill: {
-    position: "absolute",
-    bottom: 8,
-    left: 8,
-    backgroundColor: "rgba(15,23,42,0.78)",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  distancePillText: { color: "#fff", fontSize: 11, fontWeight: "700" },
-  pkgPill: {
-    position: "absolute",
-    top: 8,
-    right: 8,
-    backgroundColor: COLORS.accent,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  pkgPillText: { color: "#fff", fontSize: 11, fontWeight: "800" },
-  spotName: { fontSize: 14, fontWeight: "700", color: COLORS.text },
-  spotCategory: {
-    fontSize: 11,
-    color: COLORS.primary,
-    fontWeight: "600",
-    marginTop: 2,
-    textTransform: "uppercase",
-  },
-  spotCta: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 10,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-  },
-  spotCtaText: { fontSize: 12, fontWeight: "600", color: COLORS.primary, flex: 1 },
-  spotCtaArrow: { color: COLORS.primary, fontWeight: "700" },
-
-  vehicleCard: {
-    width: 160,
-    backgroundColor: COLORS.surface,
-    borderRadius: 16,
-    marginRight: 12,
-    padding: 10,
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
-  },
-  vehicleImage: { width: "100%", height: 88, borderRadius: 12, marginBottom: 8 },
-  vehicleImagePlaceholder: {
-    backgroundColor: "#F1F5F9",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  vehicleTitle: { fontSize: 13, fontWeight: "700", color: COLORS.text, textTransform: "capitalize" },
-  vehicleSub: { fontSize: 11, color: COLORS.textSecondary, marginTop: 1 },
+  vehicleCard: { width: 168 },
+  vehicleImage: { width: "100%", height: 88 },
   vehicleFooter: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginTop: 8,
+    marginTop: 10,
   },
-  vehiclePrice: { fontSize: 14, fontWeight: "800", color: COLORS.accent },
-  rentChip: {
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  rentChipText: { color: "#fff", fontSize: 11, fontWeight: "700" },
 
-
-  hotelCard: {
-    width: 200,
-    backgroundColor: COLORS.surface,
-    borderRadius: 18,
-    marginRight: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: "#EDE9FE",
-    shadowColor: "#7C3AED",
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
-  },
-  hotelIconRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
-  dotPill: { backgroundColor: "#1D4ED8", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
-  dotPillText: { color: "#fff", fontSize: 10, fontWeight: "800" },
-  hotelName: { fontSize: 14, fontWeight: "800", color: COLORS.text },
-  hotelAddr: { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
-  hotelFooter: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 10 },
-  hotelStatus: { flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
-  hotelStatusDot: { width: 6, height: 6, borderRadius: 3, marginRight: 5 },
-  hotelStatusText: { fontSize: 10, fontWeight: "800", textTransform: "capitalize" },
-  hotelPrice: { fontSize: 13, fontWeight: "800", color: COLORS.accent },
-  hotelCta: { fontSize: 12, fontWeight: "700", color: "#7C3AED", marginTop: 10 },
-  emptyBox: {
-    marginHorizontal: 20,
-    backgroundColor: COLORS.surface,
-    borderRadius: 16,
-    padding: 24,
+  hotelCard: { width: 224 },
+  statusLine: { flexDirection: "row", alignItems: "center", marginTop: 10 },
+  dot: { width: 7, height: 7, borderRadius: 4, marginRight: 8 },
+  hotelFooter: {
+    flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    justifyContent: "space-between",
+    marginTop: 10,
   },
-  emptyEmoji: { fontSize: 28, marginBottom: 6 },
-  emptyText: { color: COLORS.textMuted, fontSize: 13 },
 
+  // Sheet
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(15,23,42,0.45)",
+    backgroundColor: "rgba(0,0,0,0.6)",
   },
   sheet: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: COLORS.surface,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingBottom: 28,
-    paddingTop: 10,
-    maxHeight: "78%",
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: -4 },
-    elevation: 20,
+    backgroundColor: C.surface,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingHorizontal: 24,
+    paddingTop: 22,
+    paddingBottom: 32,
+    maxHeight: "80%",
   },
-  sheetHandle: {
-    alignSelf: "center",
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "#CBD5E1",
-    marginBottom: 12,
-  },
-  sheetHeader: { flexDirection: "row", alignItems: "flex-start", marginBottom: 6 },
-  sheetTitle: { fontSize: 20, fontWeight: "800", color: COLORS.text, letterSpacing: -0.3 },
-  sheetSub: { fontSize: 13, color: COLORS.textSecondary, marginTop: 2 },
-  sheetClose: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "#F1F5F9",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  sheetCloseText: { fontSize: 14, color: COLORS.textSecondary, fontWeight: "600" },
-  sheetDesc: { fontSize: 13, color: COLORS.textSecondary, lineHeight: 19, marginBottom: 14 },
-
-  noPkgBox: {
-    backgroundColor: "#F8FAFC",
-    borderRadius: 16,
-    padding: 28,
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  noPkgTitle: { fontSize: 15, fontWeight: "700", color: COLORS.text },
-  noPkgSub: { fontSize: 12, color: COLORS.textMuted, marginTop: 4, textAlign: "center" },
-
-  pkgCard: {
-    backgroundColor: COLORS.accentSoft,
-    borderRadius: 16,
-    padding: 14,
+  sheetHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
     marginBottom: 10,
-    borderWidth: 1,
-    borderColor: "#A7F3D0",
   },
-  pkgCardTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  pkgName: { fontSize: 15, fontWeight: "800", color: "#065F46", flex: 1, marginRight: 8 },
-  pkgPrice: { fontSize: 17, fontWeight: "800", color: COLORS.accent },
-  pkgMeta: { fontSize: 12, color: "#047857", marginTop: 4, marginBottom: 8 },
-  legChips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
-  legChip: {
-    backgroundColor: "#fff",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#D1FAE5",
+  sheetTitle: { color: C.text, fontSize: 20, fontWeight: "700" },
+  sheetDesc: { color: C.muted, fontSize: 14, lineHeight: 21, marginBottom: 8 },
+  noPkg: { paddingVertical: 28 },
+  pkgList: { maxHeight: 340 },
+  pkgRow: {
+    paddingVertical: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: C.border,
   },
-  legChipText: { fontSize: 10, fontWeight: "700", color: "#047857" },
-  pkgTap: { fontSize: 12, fontWeight: "700", color: COLORS.primary },
+  pkgTop: { flexDirection: "row", alignItems: "center" },
 
-  directionsBtn: {
-    marginTop: 8,
-    backgroundColor: COLORS.navy,
+  // Buttons
+  primaryBtn: {
+    backgroundColor: C.text,
     paddingVertical: 14,
-    borderRadius: 14,
+    borderRadius: 8,
     alignItems: "center",
+    marginTop: 16,
   },
-  directionsBtnText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  primaryText: { color: C.bg, fontSize: 15, fontWeight: "600" },
 
+  // Chat button
   fab: {
     position: "absolute",
     bottom: 28,
-    right: 20,
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: COLORS.primary,
-    shadowColor: COLORS.primary,
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 10,
+    right: 24,
+    borderRadius: 28,
+    backgroundColor: C.text,
     zIndex: 50,
+    elevation: 6,
   },
   fabInner: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
+    paddingVertical: 14,
+    paddingHorizontal: 22,
+    borderRadius: 28,
     justifyContent: "center",
     alignItems: "center",
   },
+  fabText: { color: C.bg, fontSize: 15, fontWeight: "600" },
 });
