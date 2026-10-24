@@ -5,109 +5,182 @@ import {
   FlatList,
   TouchableOpacity,
   Alert,
+  ScrollView,
   StyleSheet,
-  SafeAreaView,
-  StatusBar,
   Modal,
   TextInput,
-  ScrollView,
+  StatusBar,
+  Image,
   ActivityIndicator,
+  Switch,
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import {
   collection,
   onSnapshot,
   addDoc,
+  updateDoc,
   deleteDoc,
   doc,
-  updateDoc,
 } from "firebase/firestore";
 import { db } from "../../firebaseConfig";
+import { pickImageAsDataUri } from "../utils/pickImage";
 
-const EMPTY_LEG = { vehicleType: "", fromSpot: "", toSpot: "" };
+const C = {
+  navy: "#0B1224",
+  purple: "#7C3AED",
+  purpleSoft: "#F1EAFE",
+  green: "#16A34A",
+  greenSoft: "#DCFCE7",
+  red: "#DC2626",
+  bg: "#F4F5F9",
+  card: "#FFFFFF",
+  text: "#0F172A",
+  muted: "#64748B",
+  faint: "#94A3B8",
+  border: "#E5E7EB",
+};
 
-export default function AdminPackages({ navigation }) {
+const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
+
+const emptyLeg = () => ({ vehicleType: "", fromSpot: "", toSpot: "", estimatedPrice: "" });
+
+const EMPTY_FORM = {
+  name: "",
+  description: "",
+  price: "",
+  duration: "",
+  spotId: null,
+  spotName: "",
+  roundTrip: false,
+  imageUrl: null,
+  legs: [emptyLeg()],
+};
+
+export default function AdminPackagesScreen({ navigation }) {
   const [packages, setPackages] = useState([]);
+  const [spots, setSpots] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [modalVisible, setModalVisible] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
-
-  // Form state
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [price, setPrice] = useState("");
-  const [duration, setDuration] = useState("");
-  const [legs, setLegs] = useState([{ ...EMPTY_LEG }]);
   const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, "tripPackages"), (snapshot) => {
-      setPackages(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
-      setLoading(false);
-    });
-    return () => unsub();
+    const unsubPkgs = onSnapshot(
+      collection(db, "tripPackages"),
+      (snap) => {
+        setPackages(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setLoading(false);
+      },
+      () => setLoading(false)
+    );
+    const unsubSpots = onSnapshot(collection(db, "touristSpots"), (snap) =>
+      setSpots(snap.docs.map((d) => ({ id: d.id, name: d.data().name || "Untitled" })))
+    );
+    return () => {
+      unsubPkgs();
+      unsubSpots();
+    };
   }, []);
 
-  const resetForm = () => {
-    setName("");
-    setDescription("");
-    setPrice("");
-    setDuration("");
-    setLegs([{ ...EMPTY_LEG }]);
+  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+
+  const setLeg = (index, key, value) =>
+    setForm((f) => ({
+      ...f,
+      legs: f.legs.map((l, i) => (i === index ? { ...l, [key]: value } : l)),
+    }));
+
+  const addLeg = () => setForm((f) => ({ ...f, legs: [...f.legs, emptyLeg()] }));
+
+  const removeLeg = (index) =>
+    setForm((f) =>
+      f.legs.length === 1 ? f : { ...f, legs: f.legs.filter((_, i) => i !== index) }
+    );
+
+  const openAdd = () => {
     setEditingId(null);
+    setForm(EMPTY_FORM);
+    setModalOpen(true);
+  };
+
+  const openEdit = (pkg) => {
+    setEditingId(pkg.id);
+    setForm({
+      name: pkg.name || "",
+      description: pkg.description || "",
+      price: pkg.totalPrice?.toString() || pkg.price?.toString() || "",
+      duration: pkg.durationEstimate || pkg.duration || "",
+      spotId: pkg.spotId || null,
+      spotName: pkg.spotName || "",
+      roundTrip: !!pkg.roundTrip,
+      imageUrl: pkg.imageUrl || null,
+      legs: pkg.legs?.length
+        ? pkg.legs.map((l) => ({
+            vehicleType: l.vehicleType || "",
+            fromSpot: l.fromSpot || l.fromLabel || "",
+            toSpot: l.toSpot || l.toLabel || "",
+            estimatedPrice: l.estimatedPrice?.toString() || "",
+          }))
+        : [emptyLeg()],
+    });
+    setModalOpen(true);
   };
 
   const closeModal = () => {
-    setModalVisible(false);
-    resetForm();
+    setModalOpen(false);
+    setEditingId(null);
+    setForm(EMPTY_FORM);
   };
 
-  const openAdd = () => {
-    resetForm();
-    setModalVisible(true);
-  };
-
-  const openEdit = (item) => {
-    setEditingId(item.id);
-    setName(item.name || "");
-    setDescription(item.description || "");
-    setPrice(item.price?.toString() || "");
-    setDuration(item.duration || "");
-    setLegs(item.legs?.length ? item.legs : [{ ...EMPTY_LEG }]);
-    setModalVisible(true);
-  };
-
-  const addLeg = () => setLegs([...legs, { ...EMPTY_LEG }]);
-
-  const removeLeg = (index) => {
-    if (legs.length === 1) return;
-    setLegs(legs.filter((_, i) => i !== index));
-  };
-
-  const updateLeg = (index, field, value) => {
-    setLegs(legs.map((l, i) => (i === index ? { ...l, [field]: value } : l)));
+  const pickPhoto = async () => {
+    const uri = await pickImageAsDataUri({ aspect: [16, 9] });
+    if (uri) set("imageUrl", uri);
   };
 
   const handleSave = async () => {
-    if (!name.trim()) {
+    if (!form.name.trim()) {
       Alert.alert("Name required", "Enter a package name to continue.");
       return;
     }
+    if (!form.spotId) {
+      Alert.alert("Spot required", "Choose the tourist spot this package belongs to.");
+      return;
+    }
+
+    const legs = form.legs
+      .filter((l) => l.vehicleType.trim() || l.fromSpot.trim() || l.toSpot.trim())
+      .map((l) => ({
+        vehicleType: l.vehicleType.trim(),
+        fromSpot: l.fromSpot.trim(),
+        toSpot: l.toSpot.trim(),
+        fromLabel: l.fromSpot.trim(),
+        toLabel: l.toSpot.trim(),
+        estimatedPrice: parseFloat(l.estimatedPrice) || 0,
+      }));
+
+    const price = parseFloat(form.price) || 0;
+    const payload = {
+      name: form.name.trim(),
+      description: form.description.trim(),
+      price,
+      totalPrice: price,
+      duration: form.duration.trim(),
+      durationEstimate: form.duration.trim(),
+      spotId: form.spotId,
+      spotName: form.spotName,
+      roundTrip: form.roundTrip,
+      imageUrl: form.imageUrl || null,
+      legs,
+      updatedAt: new Date(),
+    };
 
     setSaving(true);
     try {
-      const payload = {
-        name: name.trim(),
-        description: description.trim(),
-        price: parseFloat(price) || 0,
-        duration: duration.trim(),
-        legs: legs.filter(
-          (l) => l.vehicleType.trim() || l.fromSpot.trim() || l.toSpot.trim()
-        ),
-        updatedAt: new Date(),
-      };
-
       if (editingId) {
         await updateDoc(doc(db, "tripPackages", editingId), payload);
       } else {
@@ -116,18 +189,16 @@ export default function AdminPackages({ navigation }) {
           createdAt: new Date(),
         });
       }
-
       closeModal();
-    } catch (error) {
-      console.error(error);
+    } catch (e) {
       Alert.alert("Could not save", "Check your connection and try again.");
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDelete = (id, pkgName) => {
-    Alert.alert("Delete package", `"${pkgName}" will be permanently removed.`, [
+  const handleDelete = (id, name) => {
+    Alert.alert("Delete package", `"${name}" will be permanently removed.`, [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
@@ -135,7 +206,7 @@ export default function AdminPackages({ navigation }) {
         onPress: async () => {
           try {
             await deleteDoc(doc(db, "tripPackages", id));
-          } catch (e) {
+          } catch {
             Alert.alert("Could not delete", "Check your connection and try again.");
           }
         },
@@ -143,59 +214,63 @@ export default function AdminPackages({ navigation }) {
     ]);
   };
 
-  const renderPackage = ({ item }) => (
-    <View style={styles.row}>
-      <View style={styles.rowTop}>
-        <View style={styles.flex}>
-          <Text style={styles.rowTitle} numberOfLines={1}>
-            {item.name}
-          </Text>
-          {item.duration ? (
-            <Text style={styles.rowMeta}>{item.duration}</Text>
-          ) : null}
-        </View>
-        {item.price > 0 && (
-          <Text style={styles.rowPrice}>₱{item.price.toLocaleString()}</Text>
+  const renderPackage = ({ item }) => {
+    const total =
+      item.totalPrice ||
+      item.price ||
+      (item.legs || []).reduce((s, l) => s + (Number(l.estimatedPrice) || 0), 0);
+    const legCount = (item.legs || []).length;
+    const route = (item.legs || []).map((l) => cap(l.vehicleType || "ride")).join(" → ");
+    return (
+      <View style={styles.card}>
+        {item.imageUrl ? (
+          <Image source={{ uri: item.imageUrl }} style={styles.cardImage} />
+        ) : (
+          <View style={[styles.cardImage, styles.placeholder]}>
+            <Ionicons name="image-outline" size={28} color={C.faint} />
+          </View>
         )}
-      </View>
-
-      {item.description ? (
-        <Text style={styles.rowDesc} numberOfLines={2}>
-          {item.description}
-        </Text>
-      ) : null}
-
-      {item.legs?.length > 0 && (
-        <View style={styles.legList}>
-          {item.legs.map((leg, idx) => (
-            <Text key={idx} style={styles.legLine} numberOfLines={1}>
-              <Text style={styles.legVehicle}>{leg.vehicleType || "Vehicle"}</Text>
-              {"   "}
-              {leg.fromSpot || "?"} to {leg.toSpot || "?"}
+        <View style={styles.cardBody}>
+          <View style={styles.rowBetween}>
+            <Text style={[styles.cardTitle, styles.flex]} numberOfLines={1}>
+              {item.name}
             </Text>
-          ))}
-        </View>
-      )}
+            {Number(total) > 0 ? (
+              <Text style={styles.price}>₱{Number(total).toLocaleString()}</Text>
+            ) : null}
+          </View>
+          <Text style={styles.cardMeta} numberOfLines={1}>
+            {[item.spotName, item.durationEstimate || item.duration]
+              .filter(Boolean)
+              .join("  ·  ") || "No spot or duration"}
+          </Text>
+          <Text style={styles.cardMeta} numberOfLines={1}>
+            {legCount} leg{legCount !== 1 ? "s" : ""}
+            {item.roundTrip ? "  ·  Round trip" : ""}
+          </Text>
+          {route ? (
+            <Text style={styles.route} numberOfLines={1}>
+              {route}
+            </Text>
+          ) : null}
 
-      <View style={styles.rowActions}>
-        <TouchableOpacity onPress={() => openEdit(item)} hitSlop={8}>
-          <Text style={styles.actionText}>Edit</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => handleDelete(item.id, item.name)}
-          hitSlop={8}
-        >
-          <Text style={[styles.actionText, styles.actionDanger]}>Delete</Text>
-        </TouchableOpacity>
+          <View style={styles.cardActions}>
+            <TouchableOpacity onPress={() => openEdit(item)} hitSlop={8}>
+              <Text style={styles.link}>Edit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => handleDelete(item.id, item.name)} hitSlop={8}>
+              <Text style={styles.danger}>Delete</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
-    </View>
-  );
+    );
+  };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
+      <StatusBar barStyle="light-content" backgroundColor={C.navy} />
 
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={() =>
@@ -207,42 +282,48 @@ export default function AdminPackages({ navigation }) {
         >
           <Text style={styles.headerLink}>Back</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={openAdd} hitSlop={8}>
-          <Text style={styles.headerAction}>New package</Text>
+        <TouchableOpacity onPress={openAdd} style={styles.headerBtn} hitSlop={8}>
+          <Ionicons name="add" size={16} color={C.navy} />
+          <Text style={styles.headerBtnText}>New package</Text>
         </TouchableOpacity>
       </View>
 
-      <Text style={styles.title}>Packages</Text>
+      <View style={styles.titleBlock}>
+        <Text style={styles.title}>Trip packages</Text>
+        <Text style={styles.subtitle}>
+          Multi-leg trips shown under each tourist spot on the homepage.
+        </Text>
+      </View>
 
-      {/* Content */}
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={C.muted} />
-        </View>
-      ) : (
-        <FlatList
-          data={packages}
-          keyExtractor={(item) => item.id}
-          renderItem={renderPackage}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>No packages yet</Text>
-              <Text style={styles.emptySub}>
-                Create your first trip package to get started.
-              </Text>
-              <TouchableOpacity style={styles.primaryBtn} onPress={openAdd}>
-                <Text style={styles.primaryText}>New package</Text>
-              </TouchableOpacity>
-            </View>
-          }
-        />
-      )}
+      <View style={styles.content}>
+        {loading ? (
+          <View style={styles.center}>
+            <ActivityIndicator color={C.purple} />
+          </View>
+        ) : (
+          <FlatList
+            data={packages}
+            keyExtractor={(item) => item.id}
+            renderItem={renderPackage}
+            contentContainerStyle={styles.list}
+            showsVerticalScrollIndicator={false}
+            ListEmptyComponent={
+              <View style={styles.empty}>
+                <Text style={styles.emptyTitle}>No packages yet</Text>
+                <Text style={styles.emptySub}>
+                  Create a trip with a photo, a spot, and the vehicles for each leg.
+                </Text>
+                <TouchableOpacity style={styles.primaryBtn} onPress={openAdd}>
+                  <Text style={styles.primaryText}>New package</Text>
+                </TouchableOpacity>
+              </View>
+            }
+          />
+        )}
+      </View>
 
-      {/* Add / Edit Modal */}
       <Modal
-        visible={modalVisible}
+        visible={modalOpen}
         transparent
         animationType="slide"
         onRequestClose={closeModal}
@@ -253,12 +334,13 @@ export default function AdminPackages({ navigation }) {
         >
           <View style={styles.overlay}>
             <View style={styles.sheet}>
+              <View style={styles.sheetHandle} />
               <View style={styles.sheetHeader}>
                 <Text style={styles.sheetTitle}>
                   {editingId ? "Edit package" : "New package"}
                 </Text>
                 <TouchableOpacity onPress={closeModal} hitSlop={8}>
-                  <Text style={styles.headerLink}>Close</Text>
+                  <Text style={styles.headerLinkDark}>Close</Text>
                 </TouchableOpacity>
               </View>
 
@@ -266,98 +348,166 @@ export default function AdminPackages({ navigation }) {
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
               >
-                <Text style={styles.label}>Name</Text>
+                <Text style={styles.label}>Photo</Text>
+                {form.imageUrl ? (
+                  <View>
+                    <Image source={{ uri: form.imageUrl }} style={styles.preview} />
+                    <TouchableOpacity
+                      style={styles.removePhoto}
+                      onPress={() => set("imageUrl", null)}
+                    >
+                      <Text style={styles.danger}>Remove photo</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <TouchableOpacity style={styles.photoPicker} onPress={pickPhoto}>
+                    <Ionicons name="camera-outline" size={24} color={C.purple} />
+                    <Text style={styles.photoPickerText}>Add a photo</Text>
+                  </TouchableOpacity>
+                )}
+
+                <Text style={styles.label}>Tourist spot</Text>
+                {spots.length === 0 ? (
+                  <Text style={styles.hint}>Add a tourist spot first.</Text>
+                ) : (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.chipRow}
+                  >
+                    {spots.map((s) => {
+                      const active = form.spotId === s.id;
+                      return (
+                        <TouchableOpacity
+                          key={s.id}
+                          style={[styles.chip, active && styles.chipActive]}
+                          onPress={() => {
+                            set("spotId", s.id);
+                            set("spotName", s.name);
+                          }}
+                        >
+                          <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                            {s.name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                )}
+
+                <Text style={styles.label}>Package name</Text>
                 <TextInput
                   style={styles.input}
-                  value={name}
-                  onChangeText={setName}
-                  placeholder="Island hopping"
+                  value={form.name}
+                  onChangeText={(v) => set("name", v)}
+                  placeholder="Island hopping adventure"
                   placeholderTextColor={C.faint}
                 />
 
                 <Text style={styles.label}>Description</Text>
                 <TextInput
                   style={[styles.input, styles.textArea]}
-                  value={description}
-                  onChangeText={setDescription}
+                  value={form.description}
+                  onChangeText={(v) => set("description", v)}
                   placeholder="What this package includes"
                   placeholderTextColor={C.faint}
                   multiline
-                  numberOfLines={3}
                   textAlignVertical="top"
                 />
 
                 <View style={styles.inline}>
-                  <View style={[styles.flex, styles.gapRight]}>
-                    <Text style={styles.label}>Price (₱)</Text>
+                  <View style={[styles.flex, { marginRight: 6 }]}>
+                    <Text style={styles.label}>Total price (₱)</Text>
                     <TextInput
                       style={styles.input}
-                      value={price}
-                      onChangeText={setPrice}
+                      value={form.price}
+                      onChangeText={(v) => set("price", v)}
                       placeholder="0"
                       placeholderTextColor={C.faint}
                       keyboardType="numeric"
                     />
                   </View>
-                  <View style={[styles.flex, styles.gapLeft]}>
+                  <View style={[styles.flex, { marginLeft: 6 }]}>
                     <Text style={styles.label}>Duration</Text>
                     <TextInput
                       style={styles.input}
-                      value={duration}
-                      onChangeText={setDuration}
+                      value={form.duration}
+                      onChangeText={(v) => set("duration", v)}
                       placeholder="1 day"
                       placeholderTextColor={C.faint}
                     />
                   </View>
                 </View>
 
-                {/* Legs */}
-                <View style={styles.sectionHead}>
+                <View style={styles.switchRow}>
+                  <Text style={styles.switchLabel}>Round trip</Text>
+                  <Switch
+                    value={form.roundTrip}
+                    onValueChange={(v) => set("roundTrip", v)}
+                    trackColor={{ false: C.border, true: C.green }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+
+                <View style={styles.legsHead}>
                   <Text style={styles.sectionTitle}>Trip legs</Text>
                   <TouchableOpacity onPress={addLeg} hitSlop={8}>
-                    <Text style={styles.headerAction}>Add leg</Text>
+                    <Text style={styles.link}>Add leg</Text>
                   </TouchableOpacity>
                 </View>
 
-                {legs.map((leg, index) => (
-                  <View key={index} style={styles.leg}>
-                    <View style={styles.legHead}>
+                {form.legs.map((leg, index) => (
+                  <View key={index} style={styles.legCard}>
+                    <View style={styles.rowBetween}>
                       <Text style={styles.legTitle}>Leg {index + 1}</Text>
-                      {legs.length > 1 && (
-                        <TouchableOpacity
-                          onPress={() => removeLeg(index)}
-                          hitSlop={8}
-                        >
-                          <Text style={[styles.actionText, styles.actionDanger]}>
-                            Remove
-                          </Text>
+                      {form.legs.length > 1 && (
+                        <TouchableOpacity onPress={() => removeLeg(index)} hitSlop={8}>
+                          <Text style={styles.danger}>Remove</Text>
                         </TouchableOpacity>
                       )}
                     </View>
 
+                    <Text style={styles.miniLabel}>Vehicle</Text>
                     <TextInput
                       style={styles.input}
                       value={leg.vehicleType}
-                      onChangeText={(v) => updateLeg(index, "vehicleType", v)}
-                      placeholder="Vehicle (motorbike, boat)"
+                      onChangeText={(v) => setLeg(index, "vehicleType", v)}
+                      placeholder="Motorbike, boat, van"
                       placeholderTextColor={C.faint}
                     />
-                    <View style={[styles.inline, styles.legInputs]}>
-                      <TextInput
-                        style={[styles.input, styles.flex, styles.gapRight]}
-                        value={leg.fromSpot}
-                        onChangeText={(v) => updateLeg(index, "fromSpot", v)}
-                        placeholder="From"
-                        placeholderTextColor={C.faint}
-                      />
-                      <TextInput
-                        style={[styles.input, styles.flex, styles.gapLeft]}
-                        value={leg.toSpot}
-                        onChangeText={(v) => updateLeg(index, "toSpot", v)}
-                        placeholder="To"
-                        placeholderTextColor={C.faint}
-                      />
+
+                    <View style={styles.inline}>
+                      <View style={[styles.flex, { marginRight: 6 }]}>
+                        <Text style={styles.miniLabel}>From</Text>
+                        <TextInput
+                          style={styles.input}
+                          value={leg.fromSpot}
+                          onChangeText={(v) => setLeg(index, "fromSpot", v)}
+                          placeholder="Start point"
+                          placeholderTextColor={C.faint}
+                        />
+                      </View>
+                      <View style={[styles.flex, { marginLeft: 6 }]}>
+                        <Text style={styles.miniLabel}>To</Text>
+                        <TextInput
+                          style={styles.input}
+                          value={leg.toSpot}
+                          onChangeText={(v) => setLeg(index, "toSpot", v)}
+                          placeholder="End point"
+                          placeholderTextColor={C.faint}
+                        />
+                      </View>
                     </View>
+
+                    <Text style={styles.miniLabel}>Estimated price (₱)</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={leg.estimatedPrice}
+                      onChangeText={(v) => setLeg(index, "estimatedPrice", v)}
+                      placeholder="0"
+                      placeholderTextColor={C.faint}
+                      keyboardType="numeric"
+                    />
                   </View>
                 ))}
 
@@ -375,7 +525,7 @@ export default function AdminPackages({ navigation }) {
                     disabled={saving}
                   >
                     {saving ? (
-                      <ActivityIndicator color={C.bg} size="small" />
+                      <ActivityIndicator color="#FFFFFF" size="small" />
                     ) : (
                       <Text style={styles.primaryText}>
                         {editingId ? "Save changes" : "Create package"}
@@ -392,180 +542,205 @@ export default function AdminPackages({ navigation }) {
   );
 }
 
-// Palette
-const C = {
-  bg: "#0E1116",
-  surface: "#151A21",
-  border: "#232A33",
-  text: "#E8EAED",
-  muted: "#8A929E",
-  faint: "#566070",
-  danger: "#E5736B",
-};
-
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  safe: { flex: 1, backgroundColor: C.bg },
+  safe: { flex: 1, backgroundColor: C.navy },
+  rowBetween: { flexDirection: "row", alignItems: "center" },
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
+  disabled: { opacity: 0.6 },
 
   // Header
   header: {
     flexDirection: "row",
-    alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 24,
-    paddingTop:
-      Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 16 : 20,
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 8,
   },
-  headerLink: { color: C.muted, fontSize: 15 },
-  headerAction: { color: C.text, fontSize: 15, fontWeight: "600" },
-  title: {
-    color: C.text,
-    fontSize: 30,
-    fontWeight: "700",
-    letterSpacing: -0.5,
-    paddingHorizontal: 24,
-    marginTop: 18,
-    marginBottom: 8,
+  headerLink: { color: C.faint, fontSize: 15 },
+  headerLinkDark: { color: C.muted, fontSize: 15 },
+  headerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
   },
+  headerBtnText: { color: C.navy, fontSize: 14, fontWeight: "700" },
+  titleBlock: { backgroundColor: C.navy, paddingHorizontal: 20, paddingBottom: 22 },
+  title: { color: "#FFFFFF", fontSize: 26, fontWeight: "700", letterSpacing: -0.4 },
+  subtitle: { color: C.faint, fontSize: 13, lineHeight: 19, marginTop: 6 },
 
-  // List
-  listContent: { paddingHorizontal: 24, paddingBottom: 48, flexGrow: 1 },
-  center: { flex: 1, justifyContent: "center", alignItems: "center" },
-
-  // Empty
-  empty: { paddingTop: 96, alignItems: "flex-start" },
-  emptyTitle: {
-    color: C.text,
-    fontSize: 18,
-    fontWeight: "600",
-    marginBottom: 6,
+  // Content sheet
+  content: {
+    flex: 1,
+    backgroundColor: C.bg,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    marginTop: -12,
+    overflow: "hidden",
   },
-  emptySub: {
-    color: C.muted,
-    fontSize: 15,
-    lineHeight: 22,
-    marginBottom: 24,
-  },
+  list: { padding: 20, paddingBottom: 40, flexGrow: 1 },
 
-  // Package row
-  row: {
-    paddingVertical: 20,
+  // Package card
+  card: {
+    backgroundColor: C.card,
+    borderRadius: 16,
+    overflow: "hidden",
+    marginBottom: 14,
+    shadowColor: "#0F172A",
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  cardImage: { width: "100%", height: 150 },
+  placeholder: {
+    backgroundColor: C.purpleSoft,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  cardBody: { padding: 14 },
+  cardTitle: { color: C.text, fontSize: 16, fontWeight: "700" },
+  cardMeta: { color: C.muted, fontSize: 13, marginTop: 3 },
+  route: { color: C.text, fontSize: 13, fontWeight: "600", marginTop: 6 },
+  price: { color: C.text, fontSize: 15, fontWeight: "700", marginLeft: 12 },
+  cardActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 20,
+    marginTop: 12,
+    paddingTop: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: C.border,
   },
-  rowTop: { flexDirection: "row", alignItems: "flex-start" },
-  rowTitle: { color: C.text, fontSize: 17, fontWeight: "600" },
-  rowMeta: { color: C.muted, fontSize: 13, marginTop: 3 },
-  rowPrice: {
-    color: C.text,
-    fontSize: 17,
-    fontWeight: "600",
-    marginLeft: 16,
-  },
-  rowDesc: {
-    color: C.muted,
-    fontSize: 14,
-    lineHeight: 21,
-    marginTop: 10,
-  },
-  legList: { marginTop: 12 },
-  legLine: { color: C.muted, fontSize: 13, lineHeight: 22 },
-  legVehicle: { color: C.text, fontWeight: "500" },
-  rowActions: { flexDirection: "row", gap: 24, marginTop: 16 },
-  actionText: { color: C.muted, fontSize: 14, fontWeight: "500" },
-  actionDanger: { color: C.danger },
+  link: { color: C.purple, fontSize: 14, fontWeight: "600" },
+  danger: { color: C.red, fontSize: 14, fontWeight: "600" },
 
-  // Modal
-  overlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    justifyContent: "flex-end",
-  },
-  sheet: {
-    backgroundColor: C.surface,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    paddingHorizontal: 24,
-    paddingTop: 22,
-    maxHeight: "92%",
-  },
-  sheetHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 4,
-  },
-  sheetTitle: { color: C.text, fontSize: 20, fontWeight: "700" },
-
-  label: {
-    color: C.muted,
-    fontSize: 13,
-    fontWeight: "500",
-    marginTop: 18,
-    marginBottom: 8,
-  },
-  input: {
-    backgroundColor: C.bg,
-    borderWidth: 1,
-    borderColor: C.border,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: C.text,
-    fontSize: 15,
-  },
-  textArea: { minHeight: 84, textAlignVertical: "top" },
-  inline: { flexDirection: "row" },
-  gapRight: { marginRight: 6 },
-  gapLeft: { marginLeft: 6 },
-
-  // Legs
-  sectionHead: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 30,
-    paddingBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.border,
-  },
-  sectionTitle: { color: C.text, fontSize: 15, fontWeight: "600" },
-  leg: {
-    paddingVertical: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.border,
-  },
-  legHead: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  legTitle: { color: C.muted, fontSize: 13, fontWeight: "500" },
-  legInputs: { marginTop: 10 },
+  // Empty
+  empty: { paddingTop: 48, alignItems: "flex-start" },
+  emptyTitle: { color: C.text, fontSize: 17, fontWeight: "700", marginBottom: 6 },
+  emptySub: { color: C.muted, fontSize: 14, lineHeight: 21, marginBottom: 20 },
 
   // Buttons
-  modalActions: {
-    flexDirection: "row",
-    gap: 12,
-    marginTop: 28,
-    marginBottom: 32,
-  },
   primaryBtn: {
-    backgroundColor: C.text,
+    backgroundColor: C.navy,
     paddingVertical: 14,
     paddingHorizontal: 22,
-    borderRadius: 8,
+    borderRadius: 12,
     alignItems: "center",
   },
-  primaryText: { color: C.bg, fontSize: 15, fontWeight: "600" },
+  primaryText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
   secondaryBtn: {
     paddingVertical: 14,
     paddingHorizontal: 22,
-    borderRadius: 8,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: C.border,
     alignItems: "center",
   },
   secondaryText: { color: C.muted, fontSize: 15, fontWeight: "600" },
-  disabled: { opacity: 0.6 },
+
+  // Form sheet
+  overlay: { flex: 1, backgroundColor: "rgba(11,18,36,0.5)", justifyContent: "flex-end" },
+  sheet: {
+    backgroundColor: C.card,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 30,
+    maxHeight: "92%",
+  },
+  sheetHandle: {
+    alignSelf: "center",
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: C.border,
+    marginBottom: 14,
+  },
+  sheetHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  sheetTitle: { color: C.text, fontSize: 20, fontWeight: "800" },
+  label: { color: C.muted, fontSize: 13, fontWeight: "600", marginTop: 16, marginBottom: 8 },
+  miniLabel: { color: C.muted, fontSize: 12, fontWeight: "600", marginTop: 10, marginBottom: 6 },
+  hint: { color: C.faint, fontSize: 13 },
+  input: {
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: C.text,
+    fontSize: 15,
+  },
+  textArea: { minHeight: 84 },
+  inline: { flexDirection: "row" },
+
+  // Photo
+  photoPicker: {
+    height: 120,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: C.purple,
+    backgroundColor: C.purpleSoft,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 6,
+  },
+  photoPickerText: { color: C.purple, fontSize: 14, fontWeight: "700" },
+  preview: { width: "100%", height: 160, borderRadius: 14 },
+  removePhoto: { alignSelf: "flex-end", marginTop: 8 },
+
+  // Spot chips
+  chipRow: { gap: 8, paddingVertical: 2 },
+  chip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 18,
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  chipActive: { backgroundColor: C.navy, borderColor: C.navy },
+  chipText: { color: C.muted, fontSize: 13, fontWeight: "600" },
+  chipTextActive: { color: "#FFFFFF" },
+
+  // Switch
+  switchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 20,
+  },
+  switchLabel: { color: C.text, fontSize: 15 },
+
+  // Legs
+  legsHead: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 24,
+    marginBottom: 4,
+  },
+  sectionTitle: { color: C.text, fontSize: 15, fontWeight: "700" },
+  legCard: {
+    backgroundColor: C.bg,
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 10,
+  },
+  legTitle: { color: C.text, fontSize: 14, fontWeight: "700" },
+
+  modalActions: { flexDirection: "row", gap: 12, marginTop: 24 },
 });

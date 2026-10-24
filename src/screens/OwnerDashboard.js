@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { SafeAreaView } from "react-native-safe-area-context";
 import {
   View,
   Text,
@@ -7,7 +8,6 @@ import {
   StyleSheet,
   Image,
   ScrollView,
-  SafeAreaView,
   StatusBar,
   Alert,
   Modal,
@@ -24,7 +24,7 @@ import {
 } from "firebase/firestore";
 import { auth, db } from "../../firebaseConfig"; // ✅ FIXED PATH
 
-import { signOut } from "firebase/auth";
+import { signOut, onAuthStateChanged } from "firebase/auth";
 
 export default function OwnerDashboard({ navigation }) {
   const [vehicles, setVehicles] = useState([]);
@@ -37,8 +37,16 @@ export default function OwnerDashboard({ navigation }) {
   const [editField, setEditField] = useState("");
   const [editValue, setEditValue] = useState("");
 
+  const [authUser, setAuthUser] = useState(auth.currentUser);
+
+  // Wait for Firebase to restore the session before starting listeners
   useEffect(() => {
-    const user = auth.currentUser;
+    const unsubAuth = onAuthStateChanged(auth, (u) => setAuthUser(u));
+    return unsubAuth;
+  }, []);
+
+  useEffect(() => {
+    const user = authUser;
     if (!user) return;
 
     const vehicleQuery = query(
@@ -63,7 +71,7 @@ export default function OwnerDashboard({ navigation }) {
       unsubscribeVehicles();
       unsubscribeBookings();
     };
-  }, []);
+  }, [authUser]);
 
   const handleDeleteVehicle = (id) => {
     Alert.alert("Delete Vehicle", "Are you sure?", [
@@ -339,7 +347,7 @@ export default function OwnerDashboard({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#F4F6F8", paddingTop: 30 },
+  safe: { flex: 1, backgroundColor: "#F4F6F8" },
 
   header: {
     flexDirection: "row",

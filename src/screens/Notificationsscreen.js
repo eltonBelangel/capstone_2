@@ -3,12 +3,21 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator
 import { auth, db } from "../../firebaseConfig";
 import { collection, query, where, onSnapshot, orderBy } from "firebase/firestore";
 
+import { onAuthStateChanged } from "firebase/auth";
 export default function NotificationsScreen({ navigation }) {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const [authUser, setAuthUser] = useState(auth.currentUser);
+
+  // Wait for Firebase to restore the session before starting listeners
   useEffect(() => {
-    const user = auth.currentUser;
+    const unsubAuth = onAuthStateChanged(auth, (u) => setAuthUser(u));
+    return unsubAuth;
+  }, []);
+
+  useEffect(() => {
+    const user = authUser;
     if (!user) return;
     const q = query(collection(db, "bookings"), where("renterId", "==", user.uid), orderBy("createdAt", "desc"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -16,7 +25,7 @@ export default function NotificationsScreen({ navigation }) {
       setLoading(false);
     });
     return () => unsubscribe();
-  }, []);
+  }, [authUser]);
 
   const getIcon = (status) => {
     switch (status) {

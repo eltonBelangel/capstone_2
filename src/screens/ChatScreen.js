@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { SafeAreaView } from "react-native-safe-area-context";
 import {
   View,
   Text,
@@ -9,7 +10,6 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
 } from "react-native";
 
 import { db } from "../../firebaseConfig";
@@ -28,6 +28,12 @@ const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash"];
 // The key is sent in a header instead of the URL so it doesn't show up in logs.
 const geminiUrl = (model) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+// Easter egg: fixed reply when someone types "Melissa"
+const MELISSA_REPLY =
+  "Melissa is the designer of this app, and she is the most beautiful woman I know. " +
+  "She is the cutest, very demure, and very pretty. " +
+  "Every pixel in this app got a little brighter because she made it. 💜";
 
 export default function ChatScreen({ navigation }) {
   const [messages, setMessages] = useState([
@@ -91,7 +97,7 @@ export default function ChatScreen({ navigation }) {
         await Promise.all([
           fetchCollection("touristSpots"),
           fetchCollection("vehicles"),
-          fetchCollection("accommodations"),
+          fetchCollection("hotels"),
         ]);
 
       if (cancelled) return;
@@ -288,6 +294,16 @@ ${accommodationsText}
 
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
+
+    // Easter egg: answer "Melissa" directly without calling the AI
+    if (/\bmelissa\b/i.test(trimmed)) {
+      setMessages((prev) => [
+        ...prev,
+        { id: `${Date.now()}-melissa`, role: "assistant", text: MELISSA_REPLY },
+      ]);
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -546,7 +562,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 50,
+    paddingTop: 12,
     paddingBottom: 14,
     backgroundColor: "#FFFFFF",
     borderBottomWidth: 1,

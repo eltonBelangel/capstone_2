@@ -143,7 +143,7 @@ export default function PackageDetailScreen({ route, navigation }) {
                 packageName: pkg.name,
                 spotId: spot?.id || pkg.spotId,
                 spotName: spot?.name || pkg.spotName,
-                userId: user.uid,
+                renterId: user.uid,
                 totalPrice,
                 legs,
                 status: "pending_payment",

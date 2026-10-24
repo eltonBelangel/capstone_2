@@ -22,11 +22,12 @@ const app =
 
 let auth;
 try {
-  auth = getAuth(app);
-} catch (e) {
   auth = initializeAuth(app, {
     persistence: getReactNativePersistence(AsyncStorage),
   });
+} catch (e) {
+  // Already initialized (e.g. hot reload): reuse the existing instance
+  auth = getAuth(app);
 }
 
 const db = getFirestore(app);

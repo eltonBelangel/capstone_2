@@ -19,7 +19,7 @@ import {
   where,
   onSnapshot,
 } from "firebase/firestore";
-import { signOut } from "firebase/auth";
+import { signOut, onAuthStateChanged } from "firebase/auth";
 
 export default function AccountScreen({ navigation }) {
   const [userInfo, setUserInfo] = useState(null);
@@ -27,11 +27,19 @@ export default function AccountScreen({ navigation }) {
   const [pastBookings, setPastBookings] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const [authUser, setAuthUser] = useState(auth.currentUser);
+
+  // Wait for Firebase to restore the session before starting listeners
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (u) => setAuthUser(u));
+    return unsubAuth;
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
     let unsubscribeBookings = () => {};
 
-    const user = auth.currentUser;
+    const user = authUser;
 
     if (!user) {
       setLoading(false);
@@ -114,7 +122,7 @@ export default function AccountScreen({ navigation }) {
       isMounted = false;
       unsubscribeBookings();
     };
-  }, []);
+  }, [authUser]);
 
   const handleLogout = () => {
     Alert.alert(
