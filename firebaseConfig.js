@@ -1,11 +1,11 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore } from "firebase/firestore";
 import {
   initializeAuth,
   getAuth,
   getReactNativePersistence,
 } from "firebase/auth";
-import { getStorage } from "firebase/storage"; // ✅ ADD THIS
+import { getStorage } from "firebase/storage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const firebaseConfig = {
@@ -17,8 +17,8 @@ const firebaseConfig = {
   appId: "1:23676451104:web:d427ff2f5db5e780c47f45",
 };
 
-const app =
-  getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const isNew = getApps().length === 0;
+const app = isNew ? initializeApp(firebaseConfig) : getApp();
 
 let auth;
 try {
@@ -26,11 +26,25 @@ try {
     persistence: getReactNativePersistence(AsyncStorage),
   });
 } catch (e) {
-  // Already initialized (e.g. hot reload): reuse the existing instance
-  auth = getAuth(app);
+  if (e.code === "auth/already-initialized") {
+    auth = getAuth(app);
+  } else {
+    throw e;
+  }
 }
 
-const db = getFirestore(app);
-const storage = getStorage(app); // ✅ ADD THIS
+// Long polling is more reliable on React Native / emulators / restricted networks
+let db;
+try {
+  db = initializeFirestore(app, {
+    experimentalForceLongPolling: true,
+  });
+} catch (e) {
+  // Already initialized (e.g. hot reload)
+  const { getFirestore } = require("firebase/firestore");
+  db = getFirestore(app);
+}
 
-export { auth, db, storage }; // ✅ EXPORT STORAGE
+const storage = getStorage(app);
+
+export { auth, db, storage };
