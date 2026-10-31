@@ -13,7 +13,7 @@ import {
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
 import { collection, addDoc } from "firebase/firestore";
-import { auth, db } from "../../firebaseConfig"; // ✅ FIXED PATH
+import { auth, db } from "../../firebaseConfig"; 
 
 import MapView, { Marker } from "react-native-maps";
 

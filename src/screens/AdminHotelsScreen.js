@@ -42,10 +42,6 @@ const C = {
   border: "#E5E7EB",
 };
 
-const STATUSES = ["available", "limited", "full"];
-const STATUS_COLOR = { available: C.green, limited: C.amber, full: C.red };
-const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
-
 // Starter list: San Carlos City hotels
 const STARTER_HOTELS = [
   { name: "Ma. Awani Hotel & Suites", phone: "0917-146-9562", email: "Awanihot2019@yahoo.com", facebookName: "Ma. Awani Hotel & Suites", facebookUrl: "https://www.facebook.com/share/19WZ3E72jg/?mibextid=wwXIfr", address: "East Euzkara Avenue, Brgy. Palampas, San Carlos City, Negros Occidental", priceFrom: 2299 },
@@ -73,12 +69,36 @@ const EMPTY = {
   latitude: "",
   longitude: "",
   externalUrl: "",
-  availability: "available",
   dotAccredited: false,
   imageUrl: null,
 };
 
 const clean = (v) => (v && String(v).trim() ? String(v).trim() : null);
+
+// Adds https:// when a link was typed without it, so it always opens on the user side
+const normalizeUrl = (u) => {
+  const t = u ? String(u).trim() : "";
+  if (!t) return null;
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+};
+
+// Accepts decimal (10.4829) or degrees-minutes-seconds (10°29'45.2"N). S and W become negative.
+const parseCoord = (raw) => {
+  const t = String(raw ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[′’‘]/g, "'")
+    .replace(/[″”“]/g, '"');
+  if (!t) return NaN;
+  const hemi = t.match(/[NSEW]/);
+  const hemiSign = hemi && (hemi[0] === "S" || hemi[0] === "W") ? -1 : 1;
+  const nums = t.replace(/[NSEW]/g, " ").match(/-?\d+(?:\.\d+)?/g);
+  if (!nums || nums.length > 3) return NaN;
+  const [d, m = 0, s = 0] = nums.map(Number);
+  const value = Math.abs(d) + Math.abs(m) / 60 + Math.abs(s) / 3600;
+  const numSign = d < 0 || /^\s*-/.test(t) ? -1 : 1;
+  return hemiSign * numSign * value;
+};
 
 const toForm = (h) => ({
   ...EMPTY,
@@ -94,27 +114,25 @@ const toForm = (h) => ({
   latitude: h.location?.lat ? String(h.location.lat) : "",
   longitude: h.location?.lng ? String(h.location.lng) : "",
   externalUrl: h.externalBookingUrl || "",
-  availability: h.availabilityStatus || "available",
   dotAccredited: !!h.dotAccredited,
   imageUrl: h.imageUrl || null,
 });
 
 const toPayload = (f) => {
-  const lat = parseFloat(f.latitude);
-  const lng = parseFloat(f.longitude);
+  const lat = parseCoord(f.latitude);
+  const lng = parseCoord(f.longitude);
   return {
     name: f.name.trim(),
     partnerName: clean(f.partnerName),
     phone: clean(f.phone),
     email: clean(f.email),
     facebookName: clean(f.facebookName),
-    facebookUrl: clean(f.facebookUrl),
+    facebookUrl: normalizeUrl(f.facebookUrl),
     address: clean(f.address),
     description: clean(f.description),
     priceFrom: parseFloat(f.priceFrom) || 0,
     location: !isNaN(lat) && !isNaN(lng) ? { lat, lng } : null,
-    externalBookingUrl: clean(f.externalUrl),
-    availabilityStatus: f.availability,
+    externalBookingUrl: normalizeUrl(f.externalUrl),
     dotAccredited: !!f.dotAccredited,
     imageUrl: f.imageUrl || null,
     isPartner: true,
@@ -122,7 +140,7 @@ const toPayload = (f) => {
   };
 };
 
-// Reusable labelled input
+// Labelled input
 function Field({ label, optional, multiline, ...inputProps }) {
   return (
     <View>
@@ -164,6 +182,32 @@ export default function AdminHotelsScreen({ navigation }) {
 
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
 
+  const toDecimalText = (v) => {
+    const n = parseCoord(v);
+    return isNaN(n) ? v.trim() : String(Number(n.toFixed(6)));
+  };
+
+  // Pasting a pair into Latitude fills both fields:
+  //   10.4829, 123.4221   or   10°29'45.2"N 123°25'19.6"E
+  const setLatitude = (v) => {
+    const dmsPair = v.match(/^(.*?[NS])\s*,?\s*(.*?[EW])\s*$/i);
+    if (dmsPair) {
+      setForm((f) => ({
+        ...f,
+        latitude: toDecimalText(dmsPair[1]),
+        longitude: toDecimalText(dmsPair[2]),
+      }));
+    } else if (v.includes(",")) {
+      const [lat, lng] = v.split(",");
+      setForm((f) => ({ ...f, latitude: lat.trim(), longitude: (lng || "").trim() }));
+    } else {
+      set("latitude", v);
+    }
+  };
+
+  // When leaving a field, turn degrees-minutes-seconds into decimal so you can see the result
+  const convertField = (key) => setForm((f) => ({ ...f, [key]: toDecimalText(f[key]) }));
+
   const openNew = () => {
     setEditingId(null);
     setForm(EMPTY);
@@ -202,6 +246,37 @@ export default function AdminHotelsScreen({ navigation }) {
       return;
     }
 
+    const hasLat = form.latitude.trim() !== "";
+    const hasLng = form.longitude.trim() !== "";
+    if (hasLat !== hasLng) {
+      Alert.alert("Location incomplete", "Enter both latitude and longitude, or leave both empty.");
+      return;
+    }
+    if (hasLat) {
+      const lat = parseCoord(form.latitude);
+      const lng = parseCoord(form.longitude);
+      if (isNaN(lat) || isNaN(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        Alert.alert("Invalid location", "Check the latitude and longitude. Example: 10.4829 and 123.4221, or 10°29'45.2\"N and 123°25'19.6\"E.");
+        return;
+      }
+    }
+
+    // Distance and "Recommended" need coordinates, so confirm before saving without them
+    if (!hasLat) {
+      Alert.alert(
+        "No location",
+        "Without latitude and longitude, tourists won't see this hotel's distance and it can't be recommended as the nearest.",
+        [
+          { text: "Go back", style: "cancel" },
+          { text: "Save anyway", onPress: doSave },
+        ]
+      );
+      return;
+    }
+    doSave();
+  };
+
+  const doSave = async () => {
     setSaving(true);
     try {
       const payload = toPayload(form);
@@ -227,6 +302,7 @@ export default function AdminHotelsScreen({ navigation }) {
         onPress: async () => {
           try {
             await deleteDoc(doc(db, "hotels", h.id));
+            if (editingId === h.id) closeForm();
           } catch {
             Alert.alert("Could not delete", "Check your connection and try again.");
           }
@@ -238,7 +314,7 @@ export default function AdminHotelsScreen({ navigation }) {
   const importStarter = () => {
     Alert.alert(
       `Import ${STARTER_HOTELS.length} hotels`,
-      "Add the San Carlos City hotels to your list? You can edit each one afterwards.",
+      "Add the San Carlos City hotels to your list? Add each hotel's latitude and longitude afterwards.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -271,9 +347,8 @@ export default function AdminHotelsScreen({ navigation }) {
   };
 
   const renderHotel = ({ item }) => {
-    const status = item.availabilityStatus || "available";
-    const contact =
-      [item.phone, item.email].filter(Boolean)[0] || item.facebookName || "No contact";
+    const contact = [item.phone, item.email].filter(Boolean)[0] || item.facebookName || "No contact";
+    const hasMap = !!item.location?.lat;
     return (
       <TouchableOpacity style={styles.card} onPress={() => openEdit(item)} activeOpacity={0.85}>
         {item.imageUrl ? (
@@ -302,8 +377,17 @@ export default function AdminHotelsScreen({ navigation }) {
           ) : null}
 
           <View style={[styles.row, { marginTop: 10 }]}>
-            <View style={[styles.dot, { backgroundColor: STATUS_COLOR[status] || C.green }]} />
-            <Text style={styles.cardMeta}>{cap(status)}</Text>
+            {hasMap ? (
+              <>
+                <Ionicons name="location" size={13} color={C.green} />
+                <Text style={styles.cardMeta}>Location set</Text>
+              </>
+            ) : (
+              <>
+                <Ionicons name="location-outline" size={13} color={C.amber} />
+                <Text style={styles.noMap}>No location, no distance shown</Text>
+              </>
+            )}
             {item.dotAccredited ? (
               <View style={styles.dotBadge}>
                 <Ionicons name="shield-checkmark" size={12} color={C.green} />
@@ -324,7 +408,7 @@ export default function AdminHotelsScreen({ navigation }) {
   };
 
   const isForm = view === "form";
-
+  
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <StatusBar barStyle="light-content" backgroundColor={C.navy} />
@@ -369,7 +453,7 @@ export default function AdminHotelsScreen({ navigation }) {
         <Text style={styles.title}>{isForm ? (editingId ? "Edit hotel" : "New hotel") : "Partner hotels"}</Text>
         <Text style={styles.subtitle}>
           {isForm
-            ? "Fill in what you have. Only the name and one contact are required."
+            ? "Add the hotel's latitude and longitude so tourists see how far it is."
             : "Shown on the tourist homepage with their photo and contact details."}
         </Text>
       </View>
@@ -397,45 +481,35 @@ export default function AdminHotelsScreen({ navigation }) {
               </TouchableOpacity>
             )}
 
+            <Text style={styles.section}>Hotel details</Text>
             <Field label="Hotel name" value={form.name} onChangeText={(v) => set("name", v)} placeholder="Ma. Awani Hotel & Suites" />
             <Field label="Owner or contact person" optional value={form.partnerName} onChangeText={(v) => set("partnerName", v)} placeholder="Name" />
+            <Field label="Address" optional value={form.address} onChangeText={(v) => set("address", v)} placeholder="Filled from the map, or type it" />
+            <Field label="Description" optional multiline value={form.description} onChangeText={(v) => set("description", v)} placeholder="Rooms and amenities" />
+
+            <Text style={styles.section}>Location</Text>
+            <Text style={styles.hint}>
+              Used to show tourists how far the hotel is and to recommend the nearest one. Type it as
+              decimal (10.4829) or with degrees (10°29'45.2"N), either works and degrees are converted
+              automatically. You can paste both values into Latitude. N and E are positive, S and W
+              are negative.
+            </Text>
+            <Field label="Latitude" value={form.latitude} onChangeText={setLatitude} onBlur={() => convertField("latitude")} placeholder={`10.4829  or  10°29'45.2"N`} autoCapitalize="characters" />
+            <Field label="Longitude" value={form.longitude} onChangeText={(v) => set("longitude", v)} onBlur={() => convertField("longitude")} placeholder={`123.4221  or  123°25'19.6"E`} autoCapitalize="characters" />
 
             <Text style={styles.section}>Contact</Text>
             <Field label="Phone" value={form.phone} onChangeText={(v) => set("phone", v)} placeholder="0917-146-9562" keyboardType="phone-pad" />
             <Field label="Email" optional value={form.email} onChangeText={(v) => set("email", v)} placeholder="hotel@email.com" keyboardType="email-address" autoCapitalize="none" />
             <Field label="Facebook page name" optional value={form.facebookName} onChangeText={(v) => set("facebookName", v)} placeholder="Ma. Awani Hotel & Suites" />
             <Field label="Facebook link" optional value={form.facebookUrl} onChangeText={(v) => set("facebookUrl", v)} placeholder="https://facebook.com/..." keyboardType="url" autoCapitalize="none" />
-            <Field label="Booking link" optional value={form.externalUrl} onChangeText={(v) => set("externalUrl", v)} placeholder="https://hotel-website.com/book" keyboardType="url" autoCapitalize="none" />
-            <Text style={styles.hint}>Tourists who tap Book are sent to the booking link. Without one, they see the contact options.</Text>
+            <Field label="Booking or website link" optional value={form.externalUrl} onChangeText={(v) => set("externalUrl", v)} placeholder="https://hotel-website.com" keyboardType="url" autoCapitalize="none" />
+            <Text style={styles.hint}>
+              Tourists who tap the hotel are sent to the booking link. Without one, they see the phone,
+              email, Facebook and directions instead.
+            </Text>
 
-            <Text style={styles.section}>Location and price</Text>
-            <Field label="Address" optional value={form.address} onChangeText={(v) => set("address", v)} placeholder="Street, barangay, city" />
+            <Text style={styles.section}>Price</Text>
             <Field label="Price per night (₱)" optional value={form.priceFrom} onChangeText={(v) => set("priceFrom", v)} placeholder="1500" keyboardType="numeric" />
-            <View style={styles.inline}>
-              <View style={[styles.flex, { marginRight: 6 }]}>
-                <Field label="Latitude" optional value={form.latitude} onChangeText={(v) => set("latitude", v)} placeholder="10.48" keyboardType="decimal-pad" />
-              </View>
-              <View style={[styles.flex, { marginLeft: 6 }]}>
-                <Field label="Longitude" optional value={form.longitude} onChangeText={(v) => set("longitude", v)} placeholder="123.41" keyboardType="decimal-pad" />
-              </View>
-            </View>
-            <Field label="Description" optional multiline value={form.description} onChangeText={(v) => set("description", v)} placeholder="Rooms and amenities" />
-
-            <Text style={styles.section}>Status</Text>
-            <View style={styles.segment}>
-              {STATUSES.map((s) => {
-                const active = form.availability === s;
-                return (
-                  <TouchableOpacity
-                    key={s}
-                    style={[styles.segmentItem, active && styles.segmentActive]}
-                    onPress={() => set("availability", s)}
-                  >
-                    <Text style={[styles.segmentText, active && styles.segmentTextActive]}>{cap(s)}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
             <View style={styles.switchRow}>
               <Text style={styles.switchLabel}>DOT accredited</Text>
               <Switch
@@ -577,6 +651,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   dotBadgeText: { color: C.green, fontSize: 10, fontWeight: "700", letterSpacing: 0.3 },
+  noMap: { color: C.amber, fontSize: 11, fontWeight: "700", marginLeft: 8 },
   danger: { color: C.red, fontSize: 14, fontWeight: "600" },
 
   // Empty
@@ -610,13 +685,7 @@ const styles = StyleSheet.create({
   // Form
   label: { color: C.muted, fontSize: 13, fontWeight: "600", marginTop: 14, marginBottom: 6 },
   optional: { color: C.faint, fontSize: 12, fontWeight: "400" },
-  section: {
-    color: C.text,
-    fontSize: 15,
-    fontWeight: "800",
-    marginTop: 26,
-    marginBottom: 2,
-  },
+  section: { color: C.text, fontSize: 15, fontWeight: "800", marginTop: 26, marginBottom: 4 },
   hint: { color: C.faint, fontSize: 12, marginTop: 6, lineHeight: 17 },
   input: {
     backgroundColor: C.card,
@@ -646,6 +715,40 @@ const styles = StyleSheet.create({
   photoPickerText: { color: C.purple, fontSize: 14, fontWeight: "700" },
   preview: { width: "100%", height: 180, borderRadius: 14 },
   removePhoto: { alignSelf: "flex-end", marginTop: 8 },
+
+  // Map search
+  searchRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 },
+  searchBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: C.navy,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  resultRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: C.card,
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  resultName: { color: C.text, fontSize: 14, fontWeight: "700" },
+  resultAddr: { color: C.muted, fontSize: 12, marginTop: 2 },
+  locationSet: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: C.greenSoft,
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 12,
+  },
+  locationText: { color: C.green, fontSize: 14, fontWeight: "700" },
 
   // Status
   segment: {

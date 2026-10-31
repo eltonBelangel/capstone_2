@@ -3,7 +3,6 @@ import {
   View,
   Text,
   ScrollView,
-  TextInput,
   Image,
   TouchableOpacity,
   StyleSheet,
@@ -40,7 +39,6 @@ const C = {
   purpleSoft: "#F1EAFE",
   green: "#16A34A",
   greenSoft: "#DCFCE7",
-  amber: "#D97706",
   red: "#DC2626",
   bg: "#F4F5F9",
   card: "#FFFFFF",
@@ -50,14 +48,29 @@ const C = {
   border: "#E5E7EB",
 };
 
-const STATUS = {
-  available: { color: C.green, label: "Available" },
-  limited: { color: C.amber, label: "Limited" },
-  full: { color: C.red, label: "Full" },
+const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
+
+// 350 m / 2.4 km
+const formatDistance = (km) =>
+  km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`;
+
+// Adds https:// when a link was saved without it
+const normalizeUrl = (u) => {
+  const t = u ? String(u).trim() : "";
+  if (!t) return null;
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
 };
 
-const statusOf = (s) => STATUS[s] || STATUS.available;
-const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
+const openLink = async (url) => {
+  try {
+    await Linking.openURL(url);
+  } catch {
+    Alert.alert("Can't open link", url);
+  }
+};
+
+// "0927 697 3031 / 0969 545 9405" -> first number only, digits and +
+const firstPhone = (p) => (p || "").split("/")[0].replace(/[^\d+]/g, "");
 
 const isOfficeOpen = () => {
   const now = new Date();
@@ -131,24 +144,67 @@ function TabItem({ icon, label, active, onPress }) {
   );
 }
 
+// One package row, used in the spot sheet and the all-packages sheet
+function PackageRow({ pkg, spotName, onPress }) {
+  const total =
+    pkg.totalPrice ||
+    pkg.price ||
+    (pkg.legs || []).reduce((s, l) => s + (Number(l.estimatedPrice) || 0), 0);
+  const legCount = (pkg.legs || []).length;
+  const route = (pkg.legs || []).map((l) => cap(l.vehicleType || "ride")).join(" → ");
+  const duration = pkg.durationEstimate || pkg.duration;
+  return (
+    <Press style={styles.pkgCard} onPress={onPress}>
+      <View style={styles.row}>
+        <Text style={[styles.sheetSub, styles.flex]} numberOfLines={1}>
+          {pkg.name}
+        </Text>
+        {Number(total) > 0 && (
+          <Text style={styles.priceText}>₱{Number(total).toLocaleString()}</Text>
+        )}
+      </View>
+      {spotName ? (
+        <Text style={styles.spotLabel} numberOfLines={1}>
+          {spotName}
+        </Text>
+      ) : null}
+      <Text style={styles.metaText}>
+        {legCount} leg{legCount !== 1 ? "s" : ""}
+        {pkg.roundTrip ? "  ·  Round trip" : ""}
+        {duration ? `  ·  ${duration}` : ""}
+      </Text>
+      {route ? (
+        <Text style={styles.metaText} numberOfLines={1}>
+          {route}
+        </Text>
+      ) : null}
+      <View style={[styles.row, { marginTop: 8 }]}>
+        <Text style={styles.linkText}>View itinerary and book</Text>
+        <Ionicons name="chevron-forward" size={14} color={C.purple} />
+      </View>
+    </Press>
+  );
+}
+
 export default function MapScreen({ navigation }) {
   const mapRef = useRef(null);
-  const { insets, height, cardWidth, rideCardWidth, contentWidth, tabHeight } = useResponsive();
+  const { insets, height, cardWidth, contentWidth, tabHeight } = useResponsive();
 
   const [authUser, setAuthUser] = useState(auth.currentUser);
   const [userLocation, setUserLocation] = useState(null);
+  const [usingFallback, setUsingFallback] = useState(false); // true when GPS is unavailable
   const [allSpots, setAllSpots] = useState([]);
   const [allPackages, setAllPackages] = useState([]);
   const [hotels, setHotels] = useState([]);
-  const [vehicles, setVehicles] = useState([]);
   const [renterInfo, setRenterInfo] = useState(null);
   const [spotsLoading, setSpotsLoading] = useState(true);
 
-  const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("All");
   const [showAllHotels, setShowAllHotels] = useState(false);
   const [selectedSpot, setSelectedSpot] = useState(null);
   const [spotPackages, setSpotPackages] = useState([]);
+  const [selectedHotel, setSelectedHotel] = useState(null);
+  const [packagesOpen, setPackagesOpen] = useState(false);
 
   const sheetSlide = useRef(new Animated.Value(480)).current;
   const sheetFade = useRef(new Animated.Value(0)).current;
@@ -167,7 +223,9 @@ export default function MapScreen({ navigation }) {
       longitude: TOURISM_OFFICE.longitude,
     };
     const finish = (coords) => {
-      if (!cancelled) setUserLocation(coords);
+      if (cancelled) return;
+      setUsingFallback(coords === fallback);
+      setUserLocation(coords);
     };
 
     (async () => {
@@ -204,7 +262,7 @@ export default function MapScreen({ navigation }) {
     };
   }, []);
 
-  // Renter profile (used by the rent flow)
+  // Renter profile (used for the rent flow)
   useEffect(() => {
     if (!authUser) return;
     let cancelled = false;
@@ -248,9 +306,6 @@ export default function MapScreen({ navigation }) {
       onSnapshot(collection(db, "hotels"), (snap) =>
         setHotels(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
       ),
-      onSnapshot(collection(db, "vehicles"), (snap) =>
-        setVehicles(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
-      ),
     ];
 
     return () => unsubs.forEach((u) => u());
@@ -278,48 +333,46 @@ export default function MapScreen({ navigation }) {
     return ["All", ...Array.from(set)];
   }, [nearbySpots]);
 
-  const filteredSpots = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return nearbySpots.filter((s) => {
-      const matchesCategory =
-        activeCategory === "All" || s.category === activeCategory;
-      const matchesSearch =
-        !q ||
-        s.name?.toLowerCase().includes(q) ||
-        s.category?.toLowerCase().includes(q);
-      return matchesCategory && matchesSearch;
-    });
-  }, [nearbySpots, activeCategory, searchQuery]);
-
-  const sortedHotels = useMemo(
+  const filteredSpots = useMemo(
     () =>
-      [...hotels].sort(
-        (a, b) => (b.dotAccredited ? 1 : 0) - (a.dotAccredited ? 1 : 0)
+      nearbySpots.filter(
+        (s) => activeCategory === "All" || s.category === activeCategory
       ),
-    [hotels]
+    [nearbySpots, activeCategory]
   );
+
+  // Hotels sorted nearest first; hotels without a map pin go last
+  const sortedHotels = useMemo(() => {
+    const withDistance = hotels.map((h) => {
+      const hasPin =
+        typeof h.location?.lat === "number" && typeof h.location?.lng === "number";
+      return {
+        ...h,
+        distance:
+          hasPin && userLocation
+            ? getDistanceKm(
+                userLocation.latitude,
+                userLocation.longitude,
+                h.location.lat,
+                h.location.lng
+              )
+            : null,
+      };
+    });
+    return withDistance.sort((a, b) => {
+      if (a.distance == null && b.distance == null) return 0;
+      if (a.distance == null) return 1;
+      if (b.distance == null) return -1;
+      return a.distance - b.distance;
+    });
+  }, [hotels, userLocation]);
+
+  // The closest hotel with a map pin is the recommended one
+  const recommendedId =
+    sortedHotels[0]?.distance != null ? sortedHotels[0].id : null;
   const visibleHotels = showAllHotels ? sortedHotels : sortedHotels.slice(0, 3);
 
-  const rideVehicles = useMemo(() => {
-    if (!userLocation) return [];
-    return vehicles
-      .filter(
-        (v) =>
-          v.isAvailable !== false &&
-          typeof v.lat === "number" &&
-          typeof v.lng === "number"
-      )
-      .map((v) => ({
-        ...v,
-        distance: getDistanceKm(
-          userLocation.latitude,
-          userLocation.longitude,
-          v.lat,
-          v.lng
-        ),
-      }))
-      .filter((v) => v.distance <= RADIUS_KM);
-  }, [userLocation, vehicles]);
+  const spotName = (spotId) => allSpots.find((s) => s.id === spotId)?.name || "";
 
   // Actions
   const openSpotPackages = (spot) => {
@@ -357,48 +410,28 @@ export default function MapScreen({ navigation }) {
     ]).start(() => setSelectedSpot(null));
   };
 
+  const openPackage = (pkg) => {
+    const spot = allSpots.find((s) => s.id === pkg.spotId) || null;
+    setPackagesOpen(false);
+    setSelectedSpot(null);
+    setTimeout(() => {
+      navigation.navigate("PackageDetail", { package: pkg, spot });
+    }, 200);
+  };
+
   const openDirections = (lat, lng) =>
-    Linking.openURL(
+    openLink(
       `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`
     );
 
+  // Booking link opens directly; otherwise show the contact options
   const openHotel = (hotel) => {
-    if (hotel.externalBookingUrl) {
-      Linking.openURL(hotel.externalBookingUrl);
+    const bookingUrl = normalizeUrl(hotel.externalBookingUrl);
+    if (bookingUrl) {
+      openLink(bookingUrl);
       return;
     }
-    const lines = [
-      hotel.description || "Partner hotel",
-      hotel.phone ? `Phone: ${hotel.phone}` : null,
-      hotel.address ? `Address: ${hotel.address}` : null,
-      `Availability: ${cap(hotel.availabilityStatus || "available")}`,
-    ].filter(Boolean);
-
-    Alert.alert(
-      hotel.name,
-      lines.join("\n"),
-      [
-        { text: "Close", style: "cancel" },
-        hotel.location?.lat
-          ? {
-              text: "Directions",
-              onPress: () =>
-                openDirections(hotel.location.lat, hotel.location.lng),
-            }
-          : null,
-      ].filter(Boolean)
-    );
-  };
-
-  const handleRent = (vehicle) => {
-    if (!auth.currentUser) {
-      Alert.alert("Login required", "Log in to rent a vehicle.");
-      return;
-    }
-    navigation.navigate("Payment", {
-      vehicle,
-      renterName: renterInfo?.username || "Guest",
-    });
+    setSelectedHotel(hotel);
   };
 
   const locateMe = () => {
@@ -431,7 +464,15 @@ export default function MapScreen({ navigation }) {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabHeight + 90, maxWidth: contentWidth, width: "100%", alignSelf: "center" }]}
+        contentContainerStyle={[
+          styles.scrollContent,
+          {
+            paddingBottom: tabHeight + 90,
+            maxWidth: contentWidth,
+            width: "100%",
+            alignSelf: "center",
+          },
+        ]}
       >
         {/* Header */}
         <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
@@ -494,22 +535,6 @@ export default function MapScreen({ navigation }) {
             ))}
           </MapView>
 
-          <View style={styles.searchPill}>
-            <Ionicons name="search" size={16} color={C.faint} />
-            <TextInput
-              placeholder="Search spots"
-              placeholderTextColor={C.faint}
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              style={styles.searchInput}
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={8}>
-                <Ionicons name="close-circle" size={16} color={C.faint} />
-              </TouchableOpacity>
-            )}
-          </View>
-
           <TouchableOpacity
             style={styles.locateBtn}
             onPress={locateMe}
@@ -527,9 +552,7 @@ export default function MapScreen({ navigation }) {
             </View>
             <View style={styles.flex}>
               <View style={styles.badgePurple}>
-                <Text style={styles.badgePurpleText}>
-                  MUNICIPAL TOURISM OFFICE
-                </Text>
+                <Text style={styles.badgePurpleText}>MUNICIPAL TOURISM OFFICE</Text>
               </View>
               <Text style={styles.officeName} numberOfLines={1}>
                 {TOURISM_OFFICE.name}
@@ -549,9 +572,7 @@ export default function MapScreen({ navigation }) {
                 size={18}
                 color={open ? C.green : C.red}
               />
-              <Text
-                style={[styles.openText, { color: open ? C.green : C.red }]}
-              >
+              <Text style={[styles.openText, { color: open ? C.green : C.red }]}>
                 {open ? "OPEN" : "CLOSED"}
               </Text>
             </View>
@@ -561,7 +582,7 @@ export default function MapScreen({ navigation }) {
             {TOURISM_OFFICE.phone ? (
               <TouchableOpacity
                 style={styles.row}
-                onPress={() => Linking.openURL(`tel:${TOURISM_OFFICE.phone}`)}
+                onPress={() => openLink(`tel:${TOURISM_OFFICE.phone}`)}
               >
                 <Ionicons name="call-outline" size={14} color={C.muted} />
                 <Text style={styles.metaText}>{TOURISM_OFFICE.phone}</Text>
@@ -570,7 +591,7 @@ export default function MapScreen({ navigation }) {
             {TOURISM_OFFICE.website ? (
               <TouchableOpacity
                 style={styles.row}
-                onPress={() => Linking.openURL(TOURISM_OFFICE.website)}
+                onPress={() => openLink(normalizeUrl(TOURISM_OFFICE.website))}
               >
                 <Ionicons name="globe-outline" size={14} color={C.muted} />
                 <Text style={styles.metaText}>{TOURISM_OFFICE.website}</Text>
@@ -609,7 +630,8 @@ export default function MapScreen({ navigation }) {
           <Text style={styles.emptyText}>No partner hotels yet.</Text>
         ) : (
           visibleHotels.map((hotel) => {
-            const s = statusOf(hotel.availabilityStatus);
+            const isRecommended = hotel.id === recommendedId;
+            const hasBookingLink = !!normalizeUrl(hotel.externalBookingUrl);
             return (
               <Press
                 key={hotel.id}
@@ -617,10 +639,7 @@ export default function MapScreen({ navigation }) {
                 onPress={() => openHotel(hotel)}
               >
                 {hotel.imageUrl ? (
-                  <Image
-                    source={{ uri: hotel.imageUrl }}
-                    style={styles.hotelImage}
-                  />
+                  <Image source={{ uri: hotel.imageUrl }} style={styles.hotelImage} />
                 ) : (
                   <View style={[styles.hotelImage, styles.placeholder]}>
                     <Text style={styles.placeholderText}>
@@ -629,22 +648,34 @@ export default function MapScreen({ navigation }) {
                   </View>
                 )}
                 <View style={styles.flex}>
-                  {hotel.dotAccredited ? (
-                    <View style={styles.dotBadge}>
-                      <Ionicons
-                        name="shield-checkmark"
-                        size={12}
-                        color={C.green}
-                      />
-                      <Text style={styles.dotBadgeText}>DOT ACCREDITED</Text>
+                  {isRecommended || hotel.dotAccredited ? (
+                    <View style={styles.badgeRow}>
+                      {isRecommended ? (
+                        <View style={styles.recBadge}>
+                          <Ionicons name="star" size={11} color={C.purple} />
+                          <Text style={styles.recBadgeText}>RECOMMENDED</Text>
+                        </View>
+                      ) : null}
+                      {hotel.dotAccredited ? (
+                        <View style={styles.dotBadge}>
+                          <Ionicons name="shield-checkmark" size={12} color={C.green} />
+                          <Text style={styles.dotBadgeText}>DOT ACCREDITED</Text>
+                        </View>
+                      ) : null}
                     </View>
                   ) : null}
                   <Text style={styles.hotelName} numberOfLines={1}>
                     {hotel.name}
                   </Text>
                   <View style={styles.row}>
-                    <View style={[styles.dot, { backgroundColor: s.color }]} />
-                    <Text style={styles.metaText}>{s.label}</Text>
+                    <Ionicons name="navigate-outline" size={12} color={C.muted} />
+                    <Text style={styles.metaText}>
+                      {hotel.distance != null
+                        ? `${formatDistance(hotel.distance)} ${
+                            usingFallback ? "from tourism office" : "away"
+                          }`
+                        : "Distance unavailable"}
+                    </Text>
                   </View>
                   {hotel.priceFrom ? (
                     <Text style={styles.priceText}>
@@ -654,16 +685,10 @@ export default function MapScreen({ navigation }) {
                   ) : null}
                   <View style={[styles.row, { marginTop: 6 }]}>
                     <Text style={styles.linkText}>
-                      {hotel.externalBookingUrl
-                        ? "Book on hotel site"
-                        : "View details"}
+                      {hasBookingLink ? "Book on hotel site" : "Contact hotel"}
                     </Text>
                     <Ionicons
-                      name={
-                        hotel.externalBookingUrl
-                          ? "open-outline"
-                          : "chevron-forward"
-                      }
+                      name={hasBookingLink ? "open-outline" : "chevron-forward"}
                       size={14}
                       color={C.purple}
                     />
@@ -690,9 +715,7 @@ export default function MapScreen({ navigation }) {
                   style={[styles.chip, active && styles.chipActive]}
                   onPress={() => setActiveCategory(cat)}
                 >
-                  <Text
-                    style={[styles.chipText, active && styles.chipTextActive]}
-                  >
+                  <Text style={[styles.chipText, active && styles.chipTextActive]}>
                     {cap(cat)}
                   </Text>
                 </TouchableOpacity>
@@ -713,19 +736,14 @@ export default function MapScreen({ navigation }) {
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.hList}
             renderItem={({ item }) => {
-              const pkgCount = allPackages.filter(
-                (p) => p.spotId === item.id
-              ).length;
+              const pkgCount = allPackages.filter((p) => p.spotId === item.id).length;
               return (
                 <Press
                   style={[styles.spotCard, { width: cardWidth }]}
                   onPress={() => openSpotPackages(item)}
                 >
                   {item.imageUrl ? (
-                    <Image
-                      source={{ uri: item.imageUrl }}
-                      style={styles.spotImage}
-                    />
+                    <Image source={{ uri: item.imageUrl }} style={styles.spotImage} />
                   ) : (
                     <View style={[styles.spotImage, styles.placeholder]} />
                   )}
@@ -736,58 +754,14 @@ export default function MapScreen({ navigation }) {
                     </Text>
                   </View>
                   <Text style={styles.spotMeta} numberOfLines={1}>
-                    {item.distance.toFixed(1)} km
+                    {formatDistance(item.distance)}
                     {pkgCount > 0
-                      ? `  ·  ${pkgCount} ${
-                          pkgCount === 1 ? "package" : "packages"
-                        }`
+                      ? `  ·  ${pkgCount} ${pkgCount === 1 ? "package" : "packages"}`
                       : ""}
                   </Text>
                 </Press>
               );
             }}
-          />
-        )}
-
-        {/* Rides */}
-        <SectionHeader
-          title="Rides nearby"
-          action="See all"
-          onAction={() => navigation.navigate("AvailableVehiclesScreen")}
-        />
-        {rideVehicles.length === 0 ? (
-          <Text style={styles.emptyText}>No rides online right now.</Text>
-        ) : (
-          <FlatList
-            data={rideVehicles}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.hList}
-            renderItem={({ item }) => (
-              <Press style={[styles.rideCard, { width: rideCardWidth }]} onPress={() => handleRent(item)}>
-                {item.imageUrl ? (
-                  <Image
-                    source={{ uri: item.imageUrl }}
-                    style={styles.rideImage}
-                  />
-                ) : (
-                  <View style={[styles.rideImage, styles.placeholder]} />
-                )}
-                <Text style={styles.rideTitle} numberOfLines={1}>
-                  {cap((item.category || "Vehicle").replace("_", " "))}
-                </Text>
-                <Text style={styles.metaText} numberOfLines={1}>
-                  {item.distance.toFixed(1)} km away
-                </Text>
-                <View style={styles.rideFooter}>
-                  <Text style={styles.priceText}>
-                    {item.price ? `₱${item.price}` : ""}
-                  </Text>
-                  <Text style={styles.linkText}>Rent</Text>
-                </View>
-              </Press>
-            )}
           />
         )}
       </ScrollView>
@@ -798,22 +772,14 @@ export default function MapScreen({ navigation }) {
         onPress={() => navigation.navigate("Chat")}
         activeOpacity={0.9}
       >
-        <Ionicons
-          name="chatbubble-ellipses-outline"
-          size={16}
-          color="#fff"
-        />
+        <Ionicons name="chatbubble-ellipses-outline" size={16} color="#fff" />
         <Text style={styles.assistantText}>Ask assistant</Text>
       </TouchableOpacity>
 
       {/* Bottom tabs */}
       <View style={[styles.tabBar, { height: tabHeight, paddingBottom: insets.bottom }]}>
         <TabItem icon="compass" label="Explore" active />
-        <TabItem
-          icon="bicycle"
-          label="Ride"
-          onPress={() => navigation.navigate("AvailableVehiclesScreen")}
-        />
+        <TabItem icon="map" label="Packages" onPress={() => setPackagesOpen(true)} />
         <TabItem
           icon="calendar"
           label="Bookings"
@@ -826,7 +792,7 @@ export default function MapScreen({ navigation }) {
         />
       </View>
 
-      {/* Packages sheet */}
+      {/* Spot packages sheet */}
       <Modal
         visible={!!selectedSpot}
         transparent
@@ -841,9 +807,7 @@ export default function MapScreen({ navigation }) {
           />
         </Animated.View>
 
-        <Animated.View
-          style={[styles.sheet, { transform: [{ translateY: sheetSlide }] }]}
-        >
+        <Animated.View style={[styles.sheet, { transform: [{ translateY: sheetSlide }] }]}>
           <View style={styles.sheetHandle} />
           <View style={styles.sheetHeader}>
             <View style={styles.flex}>
@@ -852,11 +816,7 @@ export default function MapScreen({ navigation }) {
               </Text>
               <Text style={styles.muted}>Trip packages</Text>
             </View>
-            <TouchableOpacity
-              onPress={closeSpotSheet}
-              hitSlop={8}
-              style={styles.closeBtn}
-            >
+            <TouchableOpacity onPress={closeSpotSheet} hitSlop={8} style={styles.closeBtn}>
               <Ionicons name="close" size={18} color={C.muted} />
             </TouchableOpacity>
           </View>
@@ -864,94 +824,151 @@ export default function MapScreen({ navigation }) {
           {spotPackages.length === 0 ? (
             <View style={styles.noPkg}>
               <Text style={styles.sheetSub}>No packages yet</Text>
-              <Text style={styles.muted}>
-                Trip packages for this spot will appear here.
-              </Text>
+              <Text style={styles.muted}>Trip packages for this spot will appear here.</Text>
             </View>
           ) : (
-            <ScrollView
-              style={styles.pkgList}
-              showsVerticalScrollIndicator={false}
-            >
-              {spotPackages.map((pkg) => {
-                const total =
-                  pkg.totalPrice ||
-                  pkg.price ||
-                  (pkg.legs || []).reduce(
-                    (s, l) => s + (Number(l.estimatedPrice) || 0),
-                    0
-                  );
-                const legCount = (pkg.legs || []).length;
-                const route = (pkg.legs || [])
-                  .map((l) => cap(l.vehicleType || "ride"))
-                  .join(" → ");
-                const duration = pkg.durationEstimate || pkg.duration;
-                return (
-                  <Press
-                    key={pkg.id}
-                    style={styles.pkgCard}
-                    onPress={() => {
-                      closeSpotSheet();
-                      setTimeout(() => {
-                        navigation.navigate("PackageDetail", {
-                          package: pkg,
-                          spot: selectedSpot,
-                        });
-                      }, 200);
-                    }}
-                  >
-                    <View style={styles.row}>
-                      <Text
-                        style={[styles.sheetSub, styles.flex]}
-                        numberOfLines={1}
-                      >
-                        {pkg.name}
-                      </Text>
-                      {Number(total) > 0 && (
-                        <Text style={styles.priceText}>
-                          ₱{Number(total).toLocaleString()}
-                        </Text>
-                      )}
-                    </View>
-                    <Text style={styles.metaText}>
-                      {legCount} leg{legCount !== 1 ? "s" : ""}
-                      {pkg.roundTrip ? "  ·  Round trip" : ""}
-                      {duration ? `  ·  ${duration}` : ""}
-                    </Text>
-                    {route ? (
-                      <Text style={styles.metaText} numberOfLines={1}>
-                        {route}
-                      </Text>
-                    ) : null}
-                    <View style={[styles.row, { marginTop: 8 }]}>
-                      <Text style={styles.linkText}>
-                        View itinerary and book
-                      </Text>
-                      <Ionicons
-                        name="chevron-forward"
-                        size={14}
-                        color={C.purple}
-                      />
-                    </View>
-                  </Press>
-                );
-              })}
+            <ScrollView style={styles.pkgList} showsVerticalScrollIndicator={false}>
+              {spotPackages.map((pkg) => (
+                <PackageRow key={pkg.id} pkg={pkg} onPress={() => openPackage(pkg)} />
+              ))}
             </ScrollView>
           )}
 
           <TouchableOpacity
             style={styles.sheetDirections}
             onPress={() =>
-              selectedSpot &&
-              openDirections(selectedSpot.latitude, selectedSpot.longitude)
+              selectedSpot && openDirections(selectedSpot.latitude, selectedSpot.longitude)
             }
           >
             <Ionicons name="navigate-outline" size={16} color="#fff" />
-            <Text style={styles.sheetDirectionsText}>
-              Directions to this spot
-            </Text>
+            <Text style={styles.sheetDirectionsText}>Directions to this spot</Text>
           </TouchableOpacity>
         </Animated.View>
+      </Modal>
+
+      {/* All packages sheet (Packages tab) */}
+      <Modal
+        visible={packagesOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPackagesOpen(false)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setPackagesOpen(false)} />
+        <View style={styles.sheet}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.sheetHeader}>
+            <View style={styles.flex}>
+              <Text style={styles.sheetTitle}>All packages</Text>
+              <Text style={styles.muted}>
+                {allPackages.length} {allPackages.length === 1 ? "package" : "packages"}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setPackagesOpen(false)} hitSlop={8} style={styles.closeBtn}>
+              <Ionicons name="close" size={18} color={C.muted} />
+            </TouchableOpacity>
+          </View>
+
+          {allPackages.length === 0 ? (
+            <View style={styles.noPkg}>
+              <Text style={styles.sheetSub}>No packages yet</Text>
+              <Text style={styles.muted}>Trip packages will appear here once they are added.</Text>
+            </View>
+          ) : (
+            <ScrollView style={styles.pkgList} showsVerticalScrollIndicator={false}>
+              {allPackages.map((pkg) => (
+                <PackageRow
+                  key={pkg.id}
+                  pkg={pkg}
+                  spotName={spotName(pkg.spotId)}
+                  onPress={() => openPackage(pkg)}
+                />
+              ))}
+            </ScrollView>
+          )}
+        </View>
+      </Modal>
+
+      {/* Hotel contact sheet */}
+      <Modal
+        visible={!!selectedHotel}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSelectedHotel(null)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setSelectedHotel(null)} />
+        <View style={styles.sheet}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.sheetHeader}>
+            <View style={styles.flex}>
+              <Text style={styles.sheetTitle} numberOfLines={1}>
+                {selectedHotel?.name}
+              </Text>
+              <Text style={styles.muted} numberOfLines={2}>
+                {selectedHotel?.distance != null
+                  ? `${formatDistance(selectedHotel.distance)} ${
+                      usingFallback ? "from tourism office" : "away"
+                    }`
+                  : "Distance unavailable"}
+                {selectedHotel?.address ? `  ·  ${selectedHotel.address}` : ""}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setSelectedHotel(null)} hitSlop={8} style={styles.closeBtn}>
+              <Ionicons name="close" size={18} color={C.muted} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {selectedHotel?.description ? (
+              <Text style={[styles.muted, { marginBottom: 12 }]}>
+                {selectedHotel.description}
+              </Text>
+            ) : null}
+
+            {selectedHotel?.phone ? (
+              <TouchableOpacity
+                style={styles.contactRow}
+                onPress={() => openLink(`tel:${firstPhone(selectedHotel.phone)}`)}
+              >
+                <Ionicons name="call-outline" size={18} color={C.purple} />
+                <Text style={styles.contactText}>{selectedHotel.phone}</Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {selectedHotel?.email ? (
+              <TouchableOpacity
+                style={styles.contactRow}
+                onPress={() => openLink(`mailto:${selectedHotel.email}`)}
+              >
+                <Ionicons name="mail-outline" size={18} color={C.purple} />
+                <Text style={styles.contactText}>{selectedHotel.email}</Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {normalizeUrl(selectedHotel?.facebookUrl) ? (
+              <TouchableOpacity
+                style={styles.contactRow}
+                onPress={() => openLink(normalizeUrl(selectedHotel.facebookUrl))}
+              >
+                <Ionicons name="logo-facebook" size={18} color={C.purple} />
+                <Text style={styles.contactText}>
+                  {selectedHotel.facebookName || "Facebook page"}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {selectedHotel?.location?.lat ? (
+              <TouchableOpacity
+                style={styles.sheetDirections}
+                onPress={() =>
+                  openDirections(selectedHotel.location.lat, selectedHotel.location.lng)
+                }
+              >
+                <Ionicons name="navigate-outline" size={16} color="#fff" />
+                <Text style={styles.sheetDirectionsText}>Directions</Text>
+              </TouchableOpacity>
+            ) : null}
+          </ScrollView>
+        </View>
       </Modal>
     </View>
   );
@@ -979,8 +996,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: 20,
-    paddingTop:
-      Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 16 : 56,
+    paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 16 : 56,
     paddingBottom: 18,
   },
   brand: { fontSize: 28, fontWeight: "800", letterSpacing: -0.5 },
@@ -1011,25 +1027,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#DDE3EE",
     overflow: "hidden",
   },
-  searchPill: {
-    position: "absolute",
-    top: 14,
-    left: 16,
-    right: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    shadowColor: "#000",
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 4,
-  },
-  searchInput: { flex: 1, fontSize: 14, color: C.text, padding: 0 },
   locateBtn: {
     position: "absolute",
     right: 16,
@@ -1059,13 +1056,7 @@ const styles = StyleSheet.create({
   linkText: { color: C.purple, fontSize: 13, fontWeight: "600" },
   priceText: { color: C.text, fontSize: 14, fontWeight: "700" },
   priceUnit: { color: C.muted, fontSize: 12, fontWeight: "400" },
-  emptyText: {
-    color: C.muted,
-    fontSize: 14,
-    marginHorizontal: 20,
-    marginBottom: 8,
-  },
-  dot: { width: 7, height: 7, borderRadius: 4 },
+  emptyText: { color: C.muted, fontSize: 14, marginHorizontal: 20, marginBottom: 8 },
 
   // Tourism office
   officeCard: {
@@ -1097,12 +1088,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginBottom: 4,
   },
-  badgePurpleText: {
-    color: C.purple,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 0.4,
-  },
+  badgePurpleText: { color: C.purple, fontSize: 10, fontWeight: "700", letterSpacing: 0.4 },
   officeName: { color: C.text, fontSize: 16, fontWeight: "700" },
   openPill: {
     alignItems: "center",
@@ -1160,6 +1146,19 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   hotelImage: { width: 92, height: 92, borderRadius: 12 },
+  badgeRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  recBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 4,
+    backgroundColor: C.purpleSoft,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginBottom: 4,
+  },
+  recBadgeText: { color: C.purple, fontSize: 10, fontWeight: "700", letterSpacing: 0.3 },
   dotBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -1171,18 +1170,8 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginBottom: 4,
   },
-  dotBadgeText: {
-    color: C.green,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 0.3,
-  },
-  hotelName: {
-    color: C.text,
-    fontSize: 15,
-    fontWeight: "700",
-    marginBottom: 3,
-  },
+  dotBadgeText: { color: C.green, fontSize: 10, fontWeight: "700", letterSpacing: 0.3 },
+  hotelName: { color: C.text, fontSize: 15, fontWeight: "700", marginBottom: 3 },
 
   // Spots
   chipRow: { paddingHorizontal: 16, gap: 8, paddingBottom: 12 },
@@ -1213,45 +1202,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     maxWidth: 180,
   },
-  namePillText: {
-    color: C.text,
-    fontSize: 12,
-    fontWeight: "700",
-    flexShrink: 1,
-  },
+  namePillText: { color: C.text, fontSize: 12, fontWeight: "700", flexShrink: 1 },
   spotMeta: { color: C.muted, fontSize: 12, marginTop: 6, marginLeft: 4 },
-
-  // Rides
-  rideCard: {
-    width: 160,
-    backgroundColor: C.card,
-    borderRadius: 16,
-    padding: 10,
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
-  },
-  rideImage: { width: "100%", height: 90, borderRadius: 12, marginBottom: 8 },
-  rideTitle: {
-    color: C.text,
-    fontSize: 14,
-    fontWeight: "700",
-    textTransform: "capitalize",
-  },
-  rideFooter: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 8,
-  },
 
   // Assistant button
   assistant: {
     position: "absolute",
     right: 16,
-    bottom: TAB_HEIGHT + 14,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
@@ -1284,7 +1241,7 @@ const styles = StyleSheet.create({
   tab: { flex: 1, alignItems: "center", justifyContent: "center", gap: 3 },
   tabLabel: { fontSize: 11, fontWeight: "600" },
 
-  // Packages sheet
+  // Sheets (taller than before)
   backdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(11,18,36,0.5)",
@@ -1300,7 +1257,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 10,
     paddingBottom: 30,
-    maxHeight: "80%",
+    maxHeight: "88%",
   },
   sheetHandle: {
     alignSelf: "center",
@@ -1310,12 +1267,7 @@ const styles = StyleSheet.create({
     backgroundColor: C.border,
     marginBottom: 14,
   },
-  sheetHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-    gap: 12,
-  },
+  sheetHeader: { flexDirection: "row", alignItems: "center", marginBottom: 12, gap: 12 },
   sheetTitle: { color: C.text, fontSize: 20, fontWeight: "800" },
   sheetSub: { color: C.text, fontSize: 15, fontWeight: "700" },
   closeBtn: {
@@ -1327,13 +1279,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   noPkg: { paddingVertical: 24, alignItems: "center", gap: 4 },
-  pkgList: { maxHeight: 340 },
+  pkgList: { maxHeight: 480 },
   pkgCard: {
     backgroundColor: C.bg,
     borderRadius: 14,
     padding: 14,
     marginBottom: 10,
   },
+  spotLabel: { color: C.purple, fontSize: 12, fontWeight: "700", marginTop: 2 },
   sheetDirections: {
     marginTop: 8,
     flexDirection: "row",
@@ -1345,4 +1298,14 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   sheetDirectionsText: { color: "#FFFFFF", fontWeight: "700", fontSize: 14 },
+  contactRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: C.bg,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 8,
+  },
+  contactText: { color: C.text, fontSize: 14, fontWeight: "600", flex: 1 },
 });
