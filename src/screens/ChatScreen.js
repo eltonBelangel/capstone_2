@@ -14,6 +14,8 @@ import {
 
 import { db } from "../../firebaseConfig";
 import { collection, getDocs } from "firebase/firestore";
+import * as Location from "expo-location";
+import { TOURISM_OFFICE } from "../constants/tourismOffice";
 
 // ==========================================
 // GEMINI CONFIG
@@ -35,12 +37,27 @@ const MELISSA_REPLY =
   "She is the cutest, very demure, and very pretty. " +
   "Every pixel in this app got a little brighter because she made it. 💜";
 
+// Straight-line distance in km between two points
+const getDistanceKm = (lat1, lon1, lat2, lon2) => {
+  const toRad = (v) => (v * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+// "350 m" or "2.4 km"
+const formatKm = (km) =>
+  km == null ? "" : km < 1 ? `${Math.round(km * 1000)} m away` : `${km.toFixed(1)} km away`;
+
 export default function ChatScreen({ navigation }) {
   const [messages, setMessages] = useState([
     {
       id: "1",
       role: "assistant",
-      text: "Hi! 👋 I'm your San Carlos travel assistant. I can help you discover tourist spots, find available vehicles, and look for accommodations in San Carlos. What are you looking for today?",
+      text: "Hi! 👋 I'm your San Carlos travel assistant. I can help you discover tourist spots, find hotels and restaurants near you, and check available vehicles in San Carlos. What are you looking for today?",
     },
   ]);
 
@@ -51,11 +68,41 @@ export default function ChatScreen({ navigation }) {
   const [spotsData, setSpotsData] = useState([]);
   const [vehiclesData, setVehiclesData] = useState([]);
   const [accommodationsData, setAccommodationsData] = useState([]);
+  const [restaurantsData, setRestaurantsData] = useState([]);
+  const [packagesData, setPackagesData] = useState([]);
+  const [userLocation, setUserLocation] = useState(null);
 
   const flatListRef = useRef(null);
 
   // Caches the first model name that actually responds OK
   const workingModel = useRef(null);
+
+  // ==========================================
+  // USER LOCATION (used to sort results by distance)
+  // ==========================================
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") return;
+        const pos = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        if (!cancelled) {
+          setUserLocation({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          });
+        }
+      } catch {
+        // Falls back to the tourism office in the prompt
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
 
   
@@ -93,11 +140,13 @@ export default function ChatScreen({ navigation }) {
     };
 
     const fetchData = async () => {
-      const [spots, vehicles, accommodations] =
+      const [spots, vehicles, accommodations, restaurants, packages] =
         await Promise.all([
           fetchCollection("touristSpots"),
           fetchCollection("vehicles"),
           fetchCollection("hotels"),
+          fetchCollection("restaurants"),
+          fetchCollection("tripPackages"),
         ]);
 
       if (cancelled) return;
@@ -116,6 +165,14 @@ export default function ChatScreen({ navigation }) {
 
       if (accommodations !== null) {
         setAccommodationsData(accommodations);
+      }
+
+      if (restaurants !== null) {
+        setRestaurantsData(restaurants);
+      }
+
+      if (packages !== null) {
+        setPackagesData(packages);
       }
     };
 
@@ -168,20 +225,124 @@ export default function ChatScreen({ navigation }) {
   // BUILD GEMINI SYSTEM PROMPT
   // ==========================================
   const buildSystemPrompt = () => {
+    // Use the user's location, or the tourism office when it is unavailable
+    const here = userLocation || {
+      latitude: TOURISM_OFFICE.latitude,
+      longitude: TOURISM_OFFICE.longitude,
+    };
+    const locationNote = userLocation
+      ? `The user's current location is ${here.latitude.toFixed(5)}, ${here.longitude.toFixed(5)}.`
+      : "The user's exact location is not available, so distances are measured from the Municipal Tourism Office in San Carlos City.";
+
+    // Adds a distance to each item and keeps the nearest 15
+    const nearest = (list) =>
+      list
+        .map((item) => {
+          const lat = item.location?.lat;
+          const lng = item.location?.lng;
+          const km =
+            typeof lat === "number" && typeof lng === "number"
+              ? getDistanceKm(here.latitude, here.longitude, lat, lng)
+              : null;
+          return { ...item, km };
+        })
+        .sort((a, b) => (a.km ?? Infinity) - (b.km ?? Infinity))
+        .slice(0, 15);
+
+    const withDistance = (item) =>
+      item.km == null ? ", distance unknown" : `, ${formatKm(item.km)}`;
+
     // ------------------------------------------
     // TOURIST SPOTS
     // ------------------------------------------
     const spotsText =
       spotsData.length > 0
-        ? spotsData
+        ? nearest(spotsData)
             .map(
               (s) =>
-                `- ${s.name}${s.category ? ` (${s.category})` : ""}${
+                `- ${s.name}${s.category ? ` (${s.category})` : ""}${withDistance(s)}${
                   s.description ? `: ${s.description}` : ""
                 }`
             )
             .join("\n")
         : "No tourist spots available at the moment.";
+
+    // ------------------------------------------
+    // HOTELS (the "hotels" collection)
+    // ------------------------------------------
+    const hotelsText =
+      accommodationsData.length > 0
+        ? nearest(accommodationsData)
+            .map(
+              (h) =>
+                `- ${h.name || "Unnamed hotel"}${withDistance(h)}${
+                  h.address ? `, Address: ${h.address}` : ""
+                }${h.priceFrom ? `, From ₱${h.priceFrom}/night` : ""}${
+                  h.phone ? `, Phone: ${h.phone}` : ""
+                }${h.email ? `, Email: ${h.email}` : ""}${
+                  h.facebookName ? `, Facebook: ${h.facebookName}` : ""
+                }${h.dotAccredited ? ", DOT accredited" : ""}${
+                  h.availabilityStatus ? `, Status: ${h.availabilityStatus}` : ""
+                }`
+            )
+            .join("\n")
+        : "No hotels available at the moment.";
+
+    // ------------------------------------------
+    // RESTAURANTS (the "restaurants" collection)
+    // ------------------------------------------
+    const restaurantsText =
+      restaurantsData.length > 0
+        ? nearest(restaurantsData)
+            .map(
+              (r) =>
+                `- ${r.name || "Unnamed restaurant"}${r.cuisine ? ` (${r.cuisine})` : ""}${withDistance(r)}${
+                  r.address ? `, Address: ${r.address}` : ""
+                }${r.priceRange ? `, Price: ${r.priceRange}` : ""}${
+                  r.openingHours ? `, Hours: ${r.openingHours}` : ""
+                }${r.phone ? `, Phone: ${r.phone}` : ""}${
+                  r.description ? `: ${r.description}` : ""
+                }`
+            )
+            .join("\n")
+        : "No restaurants available at the moment.";
+
+    // ------------------------------------------
+    // TRIP PACKAGES (with prices)
+    // ------------------------------------------
+    const packagesText =
+      packagesData.length > 0
+        ? packagesData
+            .map((pkg) => {
+              const spot = spotsData.find((x) => x.id === pkg.spotId);
+              const total =
+                pkg.totalPrice ||
+                pkg.price ||
+                (pkg.legs || []).reduce((sum, l) => sum + (Number(l.estimatedPrice) || 0), 0);
+              const route = (pkg.legs || []).map((l) => l.vehicleType || "ride").join(" -> ");
+              const duration = pkg.durationEstimate || pkg.duration;
+              return `- ${pkg.name}${spot ? ` (${spot.name})` : ""}, Price: ₱${Number(total).toLocaleString()}${
+                duration ? `, Duration: ${duration}` : ""
+              }${route ? `, Route: ${route}` : ""}`;
+            })
+            .join("\n")
+        : "No trip packages available at the moment.";
+
+    // ------------------------------------------
+    // MOST VISITED (top 5 by view count)
+    // ------------------------------------------
+    const topBy = (list, label) => {
+      const top = list
+        .filter((x) => (x.viewCount || 0) > 0)
+        .sort((a, b) => (b.viewCount || 0) - (a.viewCount || 0))
+        .slice(0, 5);
+      return top.length > 0
+        ? top.map((x, i) => `${i + 1}. ${x.name} (${x.viewCount} views)`).join("\n")
+        : `No ${label} views recorded yet.`;
+    };
+    const mostVisitedText =
+      `Most visited tourist spots:\n${topBy(spotsData, "tourist spot")}\n\n` +
+      `Most visited hotels:\n${topBy(accommodationsData, "hotel")}`;
 
     // ------------------------------------------
     // VEHICLES
@@ -201,62 +362,43 @@ export default function ChatScreen({ navigation }) {
         : "No vehicles currently available.";
 
     // ------------------------------------------
-    // ACCOMMODATIONS
-    // ------------------------------------------
-    const accommodationsText =
-      accommodationsData.length > 0
-        ? accommodationsData
-            .map(
-              (a) =>
-                `- ${a.name || "Unnamed accommodation"}${
-                  a.type
-                    ? ` (${a.type})`
-                    : a.category
-                    ? ` (${a.category})`
-                    : ""
-                }${
-                  a.address
-                    ? `, Address: ${a.address}`
-                    : a.location
-                    ? `, Location: ${a.location}`
-                    : ""
-                }${a.description ? `: ${a.description}` : ""}${
-                  a.price ? `, Price: ₱${a.price}` : ""
-                }`
-            )
-            .join("\n")
-        : "No accommodations available at the moment.";
-
-    // ------------------------------------------
     // SYSTEM PROMPT
     // ------------------------------------------
-    return `You are a friendly and helpful AI travel assistant for RideLocal, a travel, tourism, and vehicle rental app focused on San Carlos City, Negros Occidental, Philippines.
+    return `You are a friendly and helpful AI travel assistant for TouraMove, a travel, tourism, and vehicle rental app focused on San Carlos City, Negros Occidental, Philippines.
 
 You help users with:
 
-1. Discovering and recommending tourist spots in San Carlos
-2. Finding and recommending available vehicles for rent in San Carlos
-3. Finding accommodations such as hotels, inns, resorts, pension houses, guesthouses, and other places to stay in San Carlos
-4. Answering general questions about San Carlos as a travel destination
+1. Discovering tourist spots in San Carlos
+2. Finding hotels, inns, resorts, and other places to stay
+3. Finding restaurants and places to eat
+4. Finding vehicles available for rent
+5. Answering general questions about San Carlos
 
-IMPORTANT RULES:
+LOCATION
+${locationNote}
+Distances are straight-line distances from that location, so they are approximate. Each list below is sorted from nearest to farthest.
 
-- If the user asks about tourist spots, attractions, beaches, mountains, parks, or places to visit in San Carlos — answer using the tourist spot data below.
-- If the user asks about vehicles, transportation, rentals, rides, motorcycles, cars, or how to get around — answer using the available vehicle data below.
-- If the user asks about hotels, accommodations, resorts, inns, pension houses, guesthouses, places to stay, lodging, or where to sleep — answer using the accommodation data below.
-- If the user asks general travel questions about San Carlos, use the available information below when relevant.
-- If the user asks "what can you do", "show me spots", "any vehicles", "where can I stay", or "what's available", answer helpfully using the data below.
+IMPORTANT RULES
+
+- Tourist spots, attractions, beaches, falls, and parks: use the TOURIST SPOTS data.
+- Hotels, inns, resorts, pension houses, and places to stay: use the HOTELS data.
+- Restaurants, food, cafes, and where to eat: use the RESTAURANTS data.
+- Prices, costs, budget, or cheapest options: use the PRICE values in the HOTELS, RESTAURANTS, TRIP PACKAGES and VEHICLES data. Say hotel prices are "starting from".
+- Trip packages, tours, and itineraries: use the TRIP PACKAGES data.
+- Popular, most visited, or top places: use the MOST VISITED data.
+- Vehicles, rentals, rides, motorcycles, and cars: use the VEHICLES data.
+- When the user asks for something near them, nearby, closest, or nearest, recommend the nearest matches first and mention their distance.
+- When the user asks for a combination, such as a hotel and a restaurant near a spot, use the distances to suggest places that are close to each other.
+- Do not invent places, prices, phone numbers, addresses, or opening hours. If a detail is not in the data, say it is not currently available.
+- If a place has no distance, say its distance is unknown.
 - If the user greets you or asks who you are, respond warmly and introduce yourself.
-- Do not invent tourist spots, vehicles, accommodations, prices, addresses, or other information that is not provided in the data.
-- If information is not available in the Firestore data, clearly say that the information is not currently available.
 - When listing multiple items, use bullet points.
-- Be conversational, friendly, and helpful.
-- Keep answers reasonably concise.
+- Be conversational and keep answers reasonably concise.
 - Focus on San Carlos City, Negros Occidental.
 
-If the question is completely unrelated to San Carlos, travel, tourism, accommodations, or vehicle rentals, say:
+If the question is completely unrelated to San Carlos, travel, food, accommodations, or vehicle rentals, say:
 
-"Sorry, I can only help with tourist spots, accommodations, and vehicle rentals in San Carlos. 😊"
+"Sorry, I can only help with tourist spots, hotels, restaurants, and vehicle rentals in San Carlos. 😊"
 
 ========================================
 TOURIST SPOTS IN SAN CARLOS
@@ -265,16 +407,34 @@ TOURIST SPOTS IN SAN CARLOS
 ${spotsText}
 
 ========================================
+HOTELS IN SAN CARLOS
+========================================
+
+${hotelsText}
+
+========================================
+RESTAURANTS IN SAN CARLOS
+========================================
+
+${restaurantsText}
+
+========================================
+TRIP PACKAGES (WITH PRICES)
+========================================
+
+${packagesText}
+
+========================================
+MOST VISITED
+========================================
+
+${mostVisitedText}
+
+========================================
 AVAILABLE VEHICLES FOR RENT
 ========================================
 
 ${vehiclesText}
-
-========================================
-ACCOMMODATIONS IN SAN CARLOS
-========================================
-
-${accommodationsText}
 `;
   };
 
@@ -522,7 +682,7 @@ ${accommodationsText}
         <View style={styles.inputContainer}>
           <TextInput
             style={styles.input}
-            placeholder="Ask about spots, vehicles, or accommodations..."
+            placeholder="Ask about spots, hotels, restaurants, or vehicles..."
             placeholderTextColor="#888"
             value={input}
             onChangeText={setInput}

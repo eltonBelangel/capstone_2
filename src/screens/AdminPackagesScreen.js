@@ -43,6 +43,55 @@ const C = {
 
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
 
+// Packages from the brochures. Each one is matched to its tourist spot by name,
+// so create "Mayana Peak" and "Sipaway Island" as tourist spots first.
+// Prices are not on the brochures, so they start at 0 and can be edited after import.
+const STARTER_PACKAGES = [
+  {
+    spot: "Mayana Peak",
+    name: "Mayana Peak Trek with Snacks (Package B)",
+    description: "Trek with a local tour guide, native coffee, alupi and budbod. Barangay Prosperidad.",
+    duration: "",
+    roundTrip: false,
+    legs: [{ vehicleType: "Trek", fromSpot: "Barangay Prosperidad", toSpot: "Mayana Peak" }],
+  },
+  {
+    spot: "Sipaway Island",
+    name: "Sipaway Nature-Based Day Tour",
+    description:
+      "Day tour: Century Old Balete Tree, Nigad Forest, SETWA Beach for lunch, and the lighthouse. Includes environmental fee, boat service, local tour guide, land transportation, lunch and afternoon snacks. Rate is per person for groups of more than 5.",
+    duration: "1 day",
+    roundTrip: true,
+    legs: [
+      { vehicleType: "Boat", fromSpot: "Mainland pier", toSpot: "Sipaway Island" },
+      { vehicleType: "Land transportation", fromSpot: "Sipaway pier", toSpot: "Balete Tree, Nigad Forest, SETWA Beach, Lighthouse" },
+      { vehicleType: "Boat", fromSpot: "Sipaway Island", toSpot: "Mainland pier" },
+    ],
+  },
+  {
+    spot: "Sipaway Island",
+    name: "Sipaway Culinary Day Tour",
+    description:
+      "Day tour: Balete Tree, Nigad Forest, danggit deboning and tuba making, SETWA Beach, and cocolane food demo with bukayo and salbaro. Includes environmental fee, local tour guide, lunch, boat service, land transportation and afternoon snacks. Rate is per person for groups of more than 5.",
+    duration: "1 day",
+    roundTrip: true,
+    legs: [
+      { vehicleType: "Boat", fromSpot: "Mainland pier", toSpot: "Sipaway Island" },
+      { vehicleType: "Land transportation", fromSpot: "Sipaway pier", toSpot: "Balete Tree, Nigad Forest, SETWA Beach, Cocolane" },
+      { vehicleType: "Boat", fromSpot: "Sipaway Island", toSpot: "Mainland pier" },
+    ],
+  },
+  {
+    spot: "Sipaway Island",
+    name: "Sipaway Ecotourism Tour Package",
+    description:
+      "Accommodation, local guides, land transportation, and meals showing local flavors. Explore the mangroves, white sand beaches and the Sipaway Island culture. Contact: 09260827472 or 09859743352.",
+    duration: "",
+    roundTrip: false,
+    legs: [{ vehicleType: "Boat", fromSpot: "Mainland pier", toSpot: "Sipaway Island" }],
+  },
+];
+
 const emptyLeg = () => ({ vehicleType: "", fromSpot: "", toSpot: "", estimatedPrice: "" });
 
 const EMPTY_FORM = {
@@ -80,6 +129,7 @@ export default function AdminPackagesScreen({ navigation }) {
   const [view, setView] = useState("list"); // "list" | "form"
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
 
   useEffect(() => {
@@ -114,6 +164,74 @@ export default function AdminPackagesScreen({ navigation }) {
     setForm((f) =>
       f.legs.length === 1 ? f : { ...f, legs: f.legs.filter((_, i) => i !== index) }
     );
+
+  const findSpot = (name) =>
+    spots.find((x) => x.name?.trim().toLowerCase() === name.toLowerCase());
+
+  const importStarter = () => {
+    const missing = [...new Set(STARTER_PACKAGES.map((p) => p.spot))].filter((n) => !findSpot(n));
+    if (missing.length > 0) {
+      Alert.alert(
+        "Add the spot first",
+        `Create these tourist spots first, then try again: ${missing.join(", ")}`
+      );
+      return;
+    }
+
+    const toAdd = STARTER_PACKAGES.filter(
+      (p) => !packages.some((x) => x.name?.trim().toLowerCase() === p.name.toLowerCase())
+    );
+    if (toAdd.length === 0) {
+      Alert.alert("Already added", "These packages are already in the list.");
+      return;
+    }
+
+    Alert.alert(
+      `Import ${toAdd.length} packages`,
+      "Add the Mayana Peak and Sipaway packages? Prices start at 0, so edit them after. You can add photos by editing each package.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Import",
+          onPress: async () => {
+            setImporting(true);
+            try {
+              for (const p of toAdd) {
+                const spot = findSpot(p.spot);
+                await addDoc(collection(db, "tripPackages"), {
+                  name: p.name,
+                  description: p.description,
+                  price: 0,
+                  totalPrice: 0,
+                  duration: p.duration,
+                  durationEstimate: p.duration,
+                  spotId: spot.id,
+                  spotName: spot.name,
+                  roundTrip: p.roundTrip,
+                  imageUrl: null,
+                  legs: p.legs.map((l) => ({
+                    vehicleType: l.vehicleType,
+                    fromSpot: l.fromSpot,
+                    toSpot: l.toSpot,
+                    fromLabel: l.fromSpot,
+                    toLabel: l.toSpot,
+                    estimatedPrice: 0,
+                  })),
+                  createdAt: new Date(),
+                  updatedAt: new Date(),
+                });
+              }
+              Alert.alert("Done", `${toAdd.length} packages added.`);
+            } catch {
+              Alert.alert("Import stopped", "Some packages may not have been added. Check the list before importing again.");
+            } finally {
+              setImporting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   const openAdd = () => {
     setEditingId(null);
@@ -460,6 +578,17 @@ export default function AdminPackagesScreen({ navigation }) {
                 <TouchableOpacity style={styles.primaryBtn} onPress={openAdd}>
                   <Text style={styles.primaryText}>New package</Text>
                 </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.importBtn, importing && styles.disabled]}
+                  onPress={importStarter}
+                  disabled={importing}
+                >
+                  {importing ? (
+                    <ActivityIndicator color={C.muted} size="small" />
+                  ) : (
+                    <Text style={styles.importText}>Import {STARTER_PACKAGES.length} brochure packages</Text>
+                  )}
+                </TouchableOpacity>
               </View>
             }
           />
@@ -470,6 +599,17 @@ export default function AdminPackagesScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
+  importBtn: {
+    marginTop: 10,
+    alignSelf: "stretch",
+    alignItems: "center",
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.card,
+  },
+  importText: { color: C.muted, fontSize: 15, fontWeight: "600" },
   flex: { flex: 1 },
   safe: { flex: 1, backgroundColor: C.navy },
   rowBetween: { flexDirection: "row", alignItems: "center" },

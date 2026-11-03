@@ -20,7 +20,7 @@ import MapView, { Marker } from "react-native-maps";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, onSnapshot, doc, getDoc } from "firebase/firestore";
+import { collection, onSnapshot, doc, getDoc, updateDoc, increment } from "firebase/firestore";
 import { auth, db } from "../../firebaseConfig";
 import { TOURISM_OFFICE } from "../constants/tourismOffice";
 import { useResponsive } from "../utils/responsive";
@@ -179,7 +179,7 @@ function PackageRow({ pkg, spotName, onPress }) {
         </Text>
       ) : null}
       <View style={[styles.row, { marginTop: 8 }]}>
-        <Text style={styles.linkText}>View itinerary and book</Text>
+        <Text style={styles.linkText}>View package photos</Text>
         <Ionicons name="chevron-forward" size={14} color={C.purple} />
       </View>
     </Press>
@@ -205,6 +205,9 @@ export default function MapScreen({ navigation }) {
   const [spotPackages, setSpotPackages] = useState([]);
   const [selectedHotel, setSelectedHotel] = useState(null);
   const [packagesOpen, setPackagesOpen] = useState(false);
+  const [restaurants, setRestaurants] = useState([]);
+  const [restaurantsOpen, setRestaurantsOpen] = useState(false);
+  const [selectedRestaurant, setSelectedRestaurant] = useState(null);
 
   const sheetSlide = useRef(new Animated.Value(480)).current;
   const sheetFade = useRef(new Animated.Value(0)).current;
@@ -306,6 +309,9 @@ export default function MapScreen({ navigation }) {
       onSnapshot(collection(db, "hotels"), (snap) =>
         setHotels(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
       ),
+      onSnapshot(collection(db, "restaurants"), (snap) =>
+        setRestaurants(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+      ),
     ];
 
     return () => unsubs.forEach((u) => u());
@@ -375,7 +381,14 @@ export default function MapScreen({ navigation }) {
   const spotName = (spotId) => allSpots.find((s) => s.id === spotId)?.name || "";
 
   // Actions
+  // Adds 1 to the view count so the chatbot knows what is most visited
+  const trackView = (collectionName, id) => {
+    if (!id) return;
+    updateDoc(doc(db, collectionName, id), { viewCount: increment(1) }).catch(() => {});
+  };
+
   const openSpotPackages = (spot) => {
+    trackView("touristSpots", spot.id);
     setSelectedSpot(spot);
     setSpotPackages(allPackages.filter((p) => p.spotId === spot.id));
     sheetSlide.setValue(480);
@@ -426,6 +439,7 @@ export default function MapScreen({ navigation }) {
 
   // Booking link opens directly; otherwise show the contact options
   const openHotel = (hotel) => {
+    trackView("hotels", hotel.id);
     const bookingUrl = normalizeUrl(hotel.externalBookingUrl);
     if (bookingUrl) {
       openLink(bookingUrl);
@@ -781,9 +795,9 @@ export default function MapScreen({ navigation }) {
         <TabItem icon="compass" label="Explore" active />
         <TabItem icon="map" label="Packages" onPress={() => setPackagesOpen(true)} />
         <TabItem
-          icon="calendar"
-          label="Bookings"
-          onPress={() => navigation.navigate("Notifications")}
+          icon="restaurant"
+          label="Restaurants"
+          onPress={() => setRestaurantsOpen(true)}
         />
         <TabItem
           icon="person"
@@ -961,6 +975,135 @@ export default function MapScreen({ navigation }) {
                 style={styles.sheetDirections}
                 onPress={() =>
                   openDirections(selectedHotel.location.lat, selectedHotel.location.lng)
+                }
+              >
+                <Ionicons name="navigate-outline" size={16} color="#fff" />
+                <Text style={styles.sheetDirectionsText}>Directions</Text>
+              </TouchableOpacity>
+            ) : null}
+          </ScrollView>
+        </View>
+      </Modal>
+      {/* Restaurants list */}
+      <Modal
+        visible={restaurantsOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setRestaurantsOpen(false)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setRestaurantsOpen(false)} />
+        <View style={styles.sheet}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.sheetHeader}>
+            <View style={styles.flex}>
+              <Text style={styles.sheetTitle}>Restaurants</Text>
+              <Text style={styles.muted}>
+                {restaurants.length} {restaurants.length === 1 ? "place" : "places"}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setRestaurantsOpen(false)} hitSlop={8} style={styles.closeBtn}>
+              <Ionicons name="close" size={18} color={C.muted} />
+            </TouchableOpacity>
+          </View>
+
+          {restaurants.length === 0 ? (
+            <View style={styles.noPkg}>
+              <Text style={styles.sheetSub}>No restaurants yet</Text>
+              <Text style={styles.muted}>Restaurants will appear here once they are added.</Text>
+            </View>
+          ) : (
+            <ScrollView style={styles.pkgList} showsVerticalScrollIndicator={false}>
+              {restaurants.map((r) => (
+                <TouchableOpacity
+                  key={r.id}
+                  style={styles.restRow}
+                  onPress={() => setSelectedRestaurant(r)}
+                  activeOpacity={0.7}
+                >
+                  {r.imageUrl ? (
+                    <Image source={{ uri: r.imageUrl }} style={styles.restThumb} />
+                  ) : (
+                    <View style={[styles.restThumb, styles.placeholder]}>
+                      <Text style={styles.placeholderText}>{r.name?.charAt(0)?.toUpperCase() || "R"}</Text>
+                    </View>
+                  )}
+                  <View style={styles.flex}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>{r.name}</Text>
+                    <Text style={styles.metaText} numberOfLines={1}>
+                      {[r.cuisine, r.priceRange].filter(Boolean).join("  ·  ") || "Restaurant"}
+                    </Text>
+                    {r.address ? (
+                      <Text style={styles.metaText} numberOfLines={1}>{r.address}</Text>
+                    ) : null}
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={C.faint} />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+      </Modal>
+
+      {/* Restaurant contact popup */}
+      <Modal
+        visible={!!selectedRestaurant}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSelectedRestaurant(null)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setSelectedRestaurant(null)} />
+        <View style={styles.sheet}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.sheetHeader}>
+            <View style={styles.flex}>
+              <Text style={styles.sheetTitle} numberOfLines={1}>{selectedRestaurant?.name}</Text>
+              <Text style={styles.muted} numberOfLines={2}>
+                {[selectedRestaurant?.cuisine, selectedRestaurant?.priceRange].filter(Boolean).join("  ·  ")}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setSelectedRestaurant(null)} hitSlop={8} style={styles.closeBtn}>
+              <Ionicons name="close" size={18} color={C.muted} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {selectedRestaurant?.address ? (
+              <Text style={[styles.muted, { marginBottom: 10 }]}>{selectedRestaurant.address}</Text>
+            ) : null}
+            {selectedRestaurant?.openingHours ? (
+              <Text style={[styles.muted, { marginBottom: 10 }]}>Hours: {selectedRestaurant.openingHours}</Text>
+            ) : null}
+            {selectedRestaurant?.description ? (
+              <Text style={[styles.muted, { marginBottom: 12 }]}>{selectedRestaurant.description}</Text>
+            ) : null}
+
+            {selectedRestaurant?.phone ? (
+              <TouchableOpacity
+                style={styles.contactRow}
+                onPress={() => openLink(`tel:${firstPhone(selectedRestaurant.phone)}`)}
+              >
+                <Ionicons name="call-outline" size={18} color={C.purple} />
+                <Text style={styles.contactText}>{selectedRestaurant.phone}</Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {normalizeUrl(selectedRestaurant?.facebookUrl) ? (
+              <TouchableOpacity
+                style={styles.contactRow}
+                onPress={() => openLink(normalizeUrl(selectedRestaurant.facebookUrl))}
+              >
+                <Ionicons name="logo-facebook" size={18} color={C.purple} />
+                <Text style={styles.contactText}>
+                  {selectedRestaurant.facebookName || "Facebook page"}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {selectedRestaurant?.location?.lat ? (
+              <TouchableOpacity
+                style={styles.sheetDirections}
+                onPress={() =>
+                  openDirections(selectedRestaurant.location.lat, selectedRestaurant.location.lng)
                 }
               >
                 <Ionicons name="navigate-outline" size={16} color="#fff" />
@@ -1307,5 +1450,15 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 8,
   },
+  restRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: C.bg,
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+  },
+  restThumb: { width: 56, height: 56, borderRadius: 12 },
   contactText: { color: C.text, fontSize: 14, fontWeight: "600", flex: 1 },
 });

@@ -1,6 +1,7 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 
 import SignUpPage from './src/screens/SignUpPage';
 import LoginPage from './src/screens/LoginPage';
@@ -13,6 +14,7 @@ import Paymentscreen from './src/screens/Paymentscreen';
 import AdminDashboard from './src/screens/AdminDashboard';
 import AvailableVehiclesScreen from './src/screens/AvailableVehiclesScreen';
 import Accountscreen from './src/screens/AccountScreen';
+import NotificationsScreen from './src/screens/Notificationsscreen';
 import BookingDetailScreen from './src/screens/Bookingdetailsscreen';
 import ChatScreen from "./src/screens/ChatScreen";
 import PackageDetailScreen from "./src/screens/PackageDetailScreen";
@@ -23,29 +25,32 @@ const Stack = createNativeStackNavigator();
 
 export default function App() {
   return (
-    <NavigationContainer>
-      <Stack.Navigator
-        initialRouteName="AuthLoading"
-        screenOptions={{ headerShown: false }}
-      >
-        <Stack.Screen name="AuthLoading" component={AuthLoadingScreen} />
-        <Stack.Screen name="Login" component={LoginPage} />
-        <Stack.Screen name="SignUp" component={SignUpPage} />
-        <Stack.Screen name="MainTabs" component={MapScreen} />
-        <Stack.Screen name="Map" component={MapScreen} />
-        <Stack.Screen name="Account" component={Accountscreen} />
-        <Stack.Screen name="Chat" component={ChatScreen} />
-        <Stack.Screen name="FullMap" component={FullMapScreen} />
-        <Stack.Screen name="AdminDashboard" component={AdminDashboard} />
-        <Stack.Screen name="Payment" component={Paymentscreen} />
-        <Stack.Screen name="BookingDetail" component={BookingDetailScreen} />
-        <Stack.Screen name="OwnerDashboard" component={OwnerDashboard} />
-        <Stack.Screen name="AvailableVehiclesScreen" component={AvailableVehiclesScreen} />
-        <Stack.Screen name="AddVehicle" component={AddVehicleScreen} />
-        <Stack.Screen name="PackageDetail" component={PackageDetailScreen} />
-        <Stack.Screen name="AdminPackages" component={AdminPackagesScreen} />
-        <Stack.Screen name="AdminHotels" component={AdminHotelsScreen} />
-      </Stack.Navigator>
-    </NavigationContainer>
+    <KeyboardProvider>
+      <NavigationContainer>
+        <Stack.Navigator
+          initialRouteName="AuthLoading"
+          screenOptions={{ headerShown: false }}
+        >
+          <Stack.Screen name="AuthLoading" component={AuthLoadingScreen} />
+          <Stack.Screen name="Login" component={LoginPage} />
+          <Stack.Screen name="SignUp" component={SignUpPage} />
+          <Stack.Screen name="MainTabs" component={MapScreen} />
+          <Stack.Screen name="Map" component={MapScreen} />
+          <Stack.Screen name="Account" component={Accountscreen} />
+          <Stack.Screen name="Chat" component={ChatScreen} />
+          <Stack.Screen name="FullMap" component={FullMapScreen} />
+          <Stack.Screen name="AdminDashboard" component={AdminDashboard} />
+          <Stack.Screen name="Payment" component={Paymentscreen} />
+          <Stack.Screen name="BookingDetail" component={BookingDetailScreen} />
+          <Stack.Screen name="OwnerDashboard" component={OwnerDashboard} />
+          <Stack.Screen name="AvailableVehiclesScreen" component={AvailableVehiclesScreen} />
+          <Stack.Screen name="Notifications" component={NotificationsScreen} />
+          <Stack.Screen name="AddVehicle" component={AddVehicleScreen} />
+          <Stack.Screen name="PackageDetail" component={PackageDetailScreen} />
+          <Stack.Screen name="AdminPackages" component={AdminPackagesScreen} />
+          <Stack.Screen name="AdminHotels" component={AdminHotelsScreen} />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </KeyboardProvider>
   );
 }

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   View,
@@ -18,6 +19,8 @@ import {
   Dimensions,
   Animated,
   Pressable,
+  BackHandler,
+  ToastAndroid,
 } from "react-native";
 
 import {
@@ -101,6 +104,8 @@ export default function AdminDashboard({ navigation }) {
   const [adminAuthorized, setAdminAuthorized] = useState(false);
 
   const unsubscribers = useRef([]);
+  const spotScrollRef = useRef(null);
+  const lastBackPress = useRef(0);
   const slideX = useRef(new Animated.Value(-SIDEBAR_W)).current;
   const backdropOp = useRef(new Animated.Value(0)).current;
 
@@ -119,8 +124,12 @@ export default function AdminDashboard({ navigation }) {
     ]).start(() => setSidebarOpen(false));
   };
 
+  const goOverview = () => {
+    setActiveTable(null);
+    setActiveNav("overview");
+  };
+
   const onNavPress = (item) => {
-    setActiveNav(item.id);
     closeSidebar();
     if (item.route) {
       setTimeout(() => navigation.navigate(item.route), 220);
@@ -131,11 +140,12 @@ export default function AdminDashboard({ navigation }) {
       return;
     }
     if (item.table) {
+      setActiveNav(item.id);
       setActiveTable(item.table);
       return;
     }
     if (item.id === "overview") {
-      setActiveTable(null);
+      goOverview();
     }
   };
 
@@ -234,6 +244,35 @@ export default function AdminDashboard({ navigation }) {
       stopListeners();
     };
   }, [navigation]);
+
+  // Phone back button: stay inside the admin console instead of falling through to user screens
+  useFocusEffect(
+    useCallback(() => {
+      const onBack = () => {
+        if (sidebarOpen) {
+          closeSidebar();
+          return true;
+        }
+        if (activeTable) {
+          goOverview();
+          return true;
+        }
+        // On the Overview: press back twice to leave the app
+        const now = Date.now();
+        if (now - lastBackPress.current < 2000) {
+          BackHandler.exitApp();
+          return true;
+        }
+        lastBackPress.current = now;
+        if (Platform.OS === "android") {
+          ToastAndroid.show("Press back again to exit", ToastAndroid.SHORT);
+        }
+        return true;
+      };
+      const sub = BackHandler.addEventListener("hardwareBackPress", onBack);
+      return () => sub.remove();
+    }, [sidebarOpen, activeTable])
+  );
 
   const handleDelete = (collectionName, itemId) => {
     Alert.alert("Delete record", "This will be permanently removed.", [
@@ -535,6 +574,11 @@ export default function AdminDashboard({ navigation }) {
 
       {/* Top bar */}
       <View style={styles.topBar}>
+        {activeTable ? (
+          <TouchableOpacity style={styles.menuBtn} onPress={goOverview} activeOpacity={0.8}>
+            <Ionicons name="arrow-back" size={22} color={C.tealDark} />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity style={styles.menuBtn} onPress={openSidebar} activeOpacity={0.8}>
           <Ionicons name="menu-outline" size={24} color={C.tealDark} />
         </TouchableOpacity>
@@ -690,17 +734,17 @@ export default function AdminDashboard({ navigation }) {
       )}
 
       {/* ADD SPOT MODAL */}
-      <Modal visible={addSpotModal} transparent animationType="slide" onRequestClose={closeAddSpot}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <Modal visible={addSpotModal} transparent statusBarTranslucent animationType="slide" onRequestClose={closeAddSpot}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
           <View style={styles.overlay}>
             <View style={[styles.sheet, styles.sheetTall]}>
               <View style={styles.sheetHeader}>
-                <Text style={styles.sheetTitle}>New tourist spot</Text>
-                <TouchableOpacity onPress={closeAddSpot} disabled={uploadingSpot}>
-                  <Text style={styles.closeLink}>Close</Text>
+                <TouchableOpacity onPress={closeAddSpot} disabled={uploadingSpot} hitSlop={10} style={styles.sheetBack}>
+                  <Ionicons name="arrow-back" size={22} color={C.text} />
                 </TouchableOpacity>
+                <Text style={[styles.sheetTitle, { flex: 1 }]}>New tourist spot</Text>
               </View>
-              <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <ScrollView ref={spotScrollRef} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 24 }}>
                 <Text style={styles.label}>Photo</Text>
                 <TouchableOpacity style={styles.imagePicker} onPress={pickSpotImage} disabled={uploadingSpot}>
                   {spotImage ? (
@@ -716,7 +760,7 @@ export default function AdminDashboard({ navigation }) {
                 <Text style={styles.label}>Category</Text>
                 <TextInput style={styles.input} value={spotCategory} onChangeText={setSpotCategory} placeholder="Beach…" placeholderTextColor={C.faint} editable={!uploadingSpot} />
                 <Text style={styles.label}>Description</Text>
-                <TextInput style={[styles.input, styles.textArea]} value={spotDescription} onChangeText={setSpotDescription} placeholder="Description" placeholderTextColor={C.faint} multiline editable={!uploadingSpot} />
+                <TextInput style={[styles.input, styles.textArea]} value={spotDescription} onChangeText={setSpotDescription} placeholder="Description" placeholderTextColor={C.faint} multiline editable={!uploadingSpot} onFocus={() => setTimeout(() => spotScrollRef.current?.scrollToEnd({ animated: true }), 250)} />
                 <View style={styles.inline}>
                   <View style={{ flex: 1, marginRight: 6 }}>
                     <Text style={styles.label}>Latitude</Text>
@@ -742,8 +786,8 @@ export default function AdminDashboard({ navigation }) {
       </Modal>
 
       {/* EDIT MODAL */}
-      <Modal visible={editModal} transparent animationType="slide" onRequestClose={() => setEditModal(false)}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <Modal visible={editModal} transparent statusBarTranslucent animationType="slide" onRequestClose={() => setEditModal(false)}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
           <View style={styles.overlay}>
             <View style={styles.sheet}>
               <View style={styles.sheetHeader}>
@@ -1020,6 +1064,7 @@ const styles = StyleSheet.create({
   sheetHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
   sheetTitle: { fontSize: 18, fontWeight: "800", color: C.text },
   closeLink: { color: C.muted, fontWeight: "600" },
+  sheetBack: { paddingRight: 12, paddingVertical: 2 },
   label: { fontSize: 13, fontWeight: "600", color: C.muted, marginTop: 12, marginBottom: 6 },
   input: {
     backgroundColor: C.bg,

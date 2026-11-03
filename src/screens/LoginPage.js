@@ -10,8 +10,8 @@ import {
   Platform,
   ScrollView,
 } from 'react-native';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../../firebaseConfig';
 
 export default function LoginPage({ navigation }) {
@@ -33,7 +33,24 @@ export default function LoginPage({ navigation }) {
       const userDoc = await getDoc(doc(db, "users", user.uid));
 
       if (userDoc.exists()) {
-        const role = userDoc.data().role;
+        const data = userDoc.data();
+
+        // Only accounts created after email verification was added are marked
+        // emailVerified: false. Older accounts have no field and are not affected.
+        if (data.emailVerified === false) {
+          if (!user.emailVerified) {
+            await signOut(auth);
+            Alert.alert(
+              "Verify your email",
+              "Please tap the verification link we sent to your email, then log in."
+            );
+            return;
+          }
+          // Verified now: remember it so the check is not needed again
+          await updateDoc(doc(db, "users", user.uid), { emailVerified: true });
+        }
+
+        const role = data.role;
         if (role === "admin") {
           navigation.replace("AdminDashboard");
         } else if (role === "owner") {
@@ -189,4 +206,3 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
-//Continue sa firebase na debugging
