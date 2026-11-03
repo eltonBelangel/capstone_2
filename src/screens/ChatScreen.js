@@ -16,6 +16,7 @@ import { db } from "../../firebaseConfig";
 import { collection, getDocs } from "firebase/firestore";
 import * as Location from "expo-location";
 import { TOURISM_OFFICE } from "../constants/tourismOffice";
+import { DINING_DIRECTORY } from "../constants/sanCarlosDining";
 
 // ==========================================
 // GEMINI CONFIG
@@ -51,6 +52,159 @@ const getDistanceKm = (lat1, lon1, lat2, lon2) => {
 // "350 m" or "2.4 km"
 const formatKm = (km) =>
   km == null ? "" : km < 1 ? `${Math.round(km * 1000)} m away` : `${km.toFixed(1)} km away`;
+
+// ==========================================
+// HOTEL QUESTIONS ANSWERED BY CODE (not by the AI)
+// "nearest hotel" / "cheapest hotel" are exact calculations, so the app
+// computes them from Firestore directly instead of asking Gemini to guess.
+// ==========================================
+const HOTEL_WORDS = /\b(hotels?|inns?|resorts?|pension|lodg(e|ing)s?|accommodations?|places? to stay|where to stay|stay)\b/i;
+const NEAREST_WORDS = /\b(nearest|closest|near ?by|near me|near)\b/i;
+const CHEAPEST_WORDS = /\b(cheapest|cheap|lowest|least expensive|most affordable|affordable|budget)\b/i;
+
+const peso = (n) => `₱${Number(n).toLocaleString()}`;
+
+const hotelLine = (h, i, extra) =>
+  `${i + 1}. ${h.name || "Unnamed hotel"}${extra ? ` (${extra})` : ""}` +
+  `${h.priceFrom ? `, from ${peso(h.priceFrom)}/night` : ""}` +
+  `${h.address ? `\n   📍 ${h.address}` : ""}` +
+  `${h.phone ? `\n   📞 ${h.phone}` : ""}`;
+
+// Returns reply text, or null when the message is not a simple nearest/cheapest hotel question
+const answerHotelQuestion = (text, hotels, here) => {
+  if (!HOTEL_WORDS.test(text) || hotels.length === 0) return null;
+
+  const wantsNearest = NEAREST_WORDS.test(text);
+  const wantsCheapest = CHEAPEST_WORDS.test(text);
+
+  // Both at once ("cheapest hotel near me") goes to the AI, which gets the ranked lists
+  if (wantsNearest === wantsCheapest) return null;
+
+  if (wantsCheapest) {
+    const ranked = hotels
+      .filter((h) => Number(h.priceFrom) > 0)
+      .sort((a, b) => Number(a.priceFrom) - Number(b.priceFrom))
+      .slice(0, 3);
+    if (ranked.length === 0) return "I don't have any hotel prices yet. 😊";
+    return (
+      `Here are the cheapest hotels in San Carlos 💸\n\n` +
+      ranked.map((h, i) => hotelLine(h, i)).join("\n\n") +
+      `\n\nPrices are starting rates per night.`
+    );
+  }
+
+  const ranked = hotels
+    .map((h) => {
+      const lat = h.location?.lat;
+      const lng = h.location?.lng;
+      const km =
+        typeof lat === "number" && typeof lng === "number"
+          ? getDistanceKm(here.latitude, here.longitude, lat, lng)
+          : null;
+      return { ...h, km };
+    })
+    .filter((h) => h.km != null)
+    .sort((a, b) => a.km - b.km)
+    .slice(0, 3);
+  if (ranked.length === 0)
+    return "I can't tell which hotel is nearest yet because no hotel has a location saved. 😊";
+  return (
+    `Here are the nearest hotels to you 📍\n\n` +
+    ranked.map((h, i) => hotelLine(h, i, formatKm(h.km))).join("\n\n")
+  );
+};
+
+// ==========================================
+// RESTAURANT QUESTIONS ANSWERED BY CODE
+// Data = dining directory (spreadsheet) merged with Firestore "restaurants"
+// ==========================================
+const normName = (n) => String(n || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// Directory first, then Firestore entries (which win when the name matches)
+const mergeRestaurants = (firestoreList) => {
+  const map = new Map();
+  DINING_DIRECTORY.forEach((r) => map.set(normName(r.name), r));
+  firestoreList.forEach((r) => {
+    const key = normName(r.name);
+    map.set(key, { ...(map.get(key) || {}), ...r });
+  });
+  return [...map.values()];
+};
+
+// "₱150 - ₱400" -> { min: 150, max: 400 }
+const parsePriceRange = (text) => {
+  const nums = String(text || "")
+    .replace(/,/g, "")
+    .match(/\d+(\.\d+)?/g);
+  if (!nums) return { min: null, max: null };
+  const v = nums.map(Number);
+  return { min: Math.min(...v), max: Math.max(...v) };
+};
+
+const RESTO_WORDS = /\b(restaurants?|restos?|food|eat|eats|eatery|eateries|dining|dine|cafes?|coffee|milk ?tea|dessert|bakery|bakeries|pizza|fast ?food|bars?|restobars?|pubs?|nightlife|carenderias?|pungko|street food)\b/i;
+
+// Optional narrowing, matched against the directory category
+const RESTO_CATEGORIES = [
+  [/\b(cafes?|coffee|milk ?tea|dessert)\b/i, "Cafes", "cafes & dessert shops"],
+  [/\b(fast ?food|pizza|bakery|bakeries)\b/i, "Pizzerias", "fast food, pizza & bakeries"],
+  [/\b(bars?|restobars?|pubs?|nightlife)\b/i, "Restobars", "restobars & pubs"],
+  [/\b(carenderias?|pungko|street food|market)\b/i, "Local Eateries", "local eateries"],
+];
+
+const restoLine = (r, i, extra) =>
+  `${i + 1}. ${r.name || "Unnamed place"}${extra ? ` (${extra})` : ""}` +
+  `${r.priceRange ? `, ${r.priceRange}` : ""}` +
+  `${r.cuisine ? `\n   🍽️ ${r.cuisine}` : ""}` +
+  `${r.address ? `\n   📍 ${r.address}` : ""}`;
+
+const answerRestaurantQuestion = (text, restaurants, here) => {
+  if (HOTEL_WORDS.test(text) || !RESTO_WORDS.test(text) || restaurants.length === 0) return null;
+
+  const wantsNearest = NEAREST_WORDS.test(text);
+  const wantsCheapest = CHEAPEST_WORDS.test(text);
+  if (wantsNearest === wantsCheapest) return null;
+
+  const cat = RESTO_CATEGORIES.find(([re]) => re.test(text));
+  const pool = cat
+    ? restaurants.filter((r) => (r.category || "").includes(cat[1]))
+    : restaurants;
+  const label = cat ? cat[2] : "places to eat";
+  if (pool.length === 0) return null;
+
+  if (wantsCheapest) {
+    const ranked = pool
+      .map((r) => ({ ...r, ...{ _p: parsePriceRange(r.priceRange) } }))
+      .filter((r) => r._p.min != null)
+      .sort((a, b) => a._p.min - b._p.min || a._p.max - b._p.max)
+      .slice(0, 3);
+    if (ranked.length === 0) return null;
+    return (
+      `Here are the cheapest ${label} in San Carlos 💸\n\n` +
+      ranked.map((r, i) => restoLine(r, i)).join("\n\n") +
+      `\n\nRanked by lowest starting price per person.`
+    );
+  }
+
+  const ranked = pool
+    .map((r) => {
+      const lat = r.location?.lat;
+      const lng = r.location?.lng;
+      const km =
+        typeof lat === "number" && typeof lng === "number"
+          ? getDistanceKm(here.latitude, here.longitude, lat, lng)
+          : null;
+      return { ...r, km };
+    })
+    .filter((r) => r.km != null)
+    .sort((a, b) => a.km - b.km)
+    .slice(0, 3);
+  if (ranked.length === 0)
+    return "I can't tell which place is nearest yet because no restaurant has a saved location. I can still tell you the cheapest ones, or list places by area. 😊";
+  return (
+    `Here are the nearest ${label} to you 📍\n\n` +
+    ranked.map((r, i) => restoLine(r, i, formatKm(r.km))).join("\n\n")
+  );
+};
 
 export default function ChatScreen({ navigation }) {
   const [messages, setMessages] = useState([
@@ -225,6 +379,7 @@ export default function ChatScreen({ navigation }) {
   // BUILD GEMINI SYSTEM PROMPT
   // ==========================================
   const buildSystemPrompt = () => {
+    const allRestaurants = mergeRestaurants(restaurantsData);
     // Use the user's location, or the tourism office when it is unavailable
     const here = userLocation || {
       latitude: TOURISM_OFFICE.latitude,
@@ -235,7 +390,7 @@ export default function ChatScreen({ navigation }) {
       : "The user's exact location is not available, so distances are measured from the Municipal Tourism Office in San Carlos City.";
 
     // Adds a distance to each item and keeps the nearest 15
-    const nearest = (list) =>
+    const nearest = (list, limit = 15) =>
       list
         .map((item) => {
           const lat = item.location?.lat;
@@ -247,7 +402,7 @@ export default function ChatScreen({ navigation }) {
           return { ...item, km };
         })
         .sort((a, b) => (a.km ?? Infinity) - (b.km ?? Infinity))
-        .slice(0, 15);
+        .slice(0, limit);
 
     const withDistance = (item) =>
       item.km == null ? ", distance unknown" : `, ${formatKm(item.km)}`;
@@ -272,7 +427,7 @@ export default function ChatScreen({ navigation }) {
     // ------------------------------------------
     const hotelsText =
       accommodationsData.length > 0
-        ? nearest(accommodationsData)
+        ? nearest(accommodationsData, 100)
             .map(
               (h) =>
                 `- ${h.name || "Unnamed hotel"}${withDistance(h)}${
@@ -288,15 +443,24 @@ export default function ChatScreen({ navigation }) {
             .join("\n")
         : "No hotels available at the moment.";
 
+    // Ready-made rankings so the AI never has to sort hotels itself
+    const cheapestHotelsText =
+      accommodationsData
+        .filter((h) => Number(h.priceFrom) > 0)
+        .sort((a, b) => Number(a.priceFrom) - Number(b.priceFrom))
+        .slice(0, 5)
+        .map((h, i) => `${i + 1}. ${h.name} - from ₱${h.priceFrom}/night`)
+        .join("\n") || "No hotel prices available.";
+
     // ------------------------------------------
-    // RESTAURANTS (the "restaurants" collection)
+    // RESTAURANTS (dining directory + "restaurants" collection)
     // ------------------------------------------
     const restaurantsText =
-      restaurantsData.length > 0
-        ? nearest(restaurantsData)
+      allRestaurants.length > 0
+        ? nearest(allRestaurants, 100)
             .map(
               (r) =>
-                `- ${r.name || "Unnamed restaurant"}${r.cuisine ? ` (${r.cuisine})` : ""}${withDistance(r)}${
+                `- ${r.name || "Unnamed restaurant"}${r.category ? ` [${r.category}]` : ""}${r.cuisine ? ` (${r.cuisine})` : ""}${withDistance(r)}${
                   r.address ? `, Address: ${r.address}` : ""
                 }${r.priceRange ? `, Price: ${r.priceRange}` : ""}${
                   r.openingHours ? `, Hours: ${r.openingHours}` : ""
@@ -306,6 +470,15 @@ export default function ChatScreen({ navigation }) {
             )
             .join("\n")
         : "No restaurants available at the moment.";
+
+    const cheapestRestaurantsText =
+      allRestaurants
+        .map((r) => ({ ...r, _p: parsePriceRange(r.priceRange) }))
+        .filter((r) => r._p.min != null)
+        .sort((a, b) => a._p.min - b._p.min || a._p.max - b._p.max)
+        .slice(0, 8)
+        .map((r, i) => `${i + 1}. ${r.name} - ${r.priceRange}`)
+        .join("\n") || "No restaurant prices available.";
 
     // ------------------------------------------
     // TRIP PACKAGES (with prices)
@@ -412,11 +585,21 @@ HOTELS IN SAN CARLOS
 
 ${hotelsText}
 
+CHEAPEST HOTELS (already sorted, lowest price first):
+${cheapestHotelsText}
+
+The HOTELS list above is already sorted nearest first. For "nearest hotel" use the first hotel listed; for "cheapest hotel" use the first one in the CHEAPEST HOTELS ranking.
+
 ========================================
 RESTAURANTS IN SAN CARLOS
 ========================================
 
 ${restaurantsText}
+
+CHEAPEST RESTAURANTS (already sorted, lowest starting price first):
+${cheapestRestaurantsText}
+
+For "cheapest restaurant / cafe / place to eat" use this ranking (or filter the list by its [category]). Restaurant prices are the typical price range per person.
 
 ========================================
 TRIP PACKAGES (WITH PRICES)
@@ -460,6 +643,22 @@ ${vehiclesText}
       setMessages((prev) => [
         ...prev,
         { id: `${Date.now()}-melissa`, role: "assistant", text: MELISSA_REPLY },
+      ]);
+      return;
+    }
+
+    // "nearest hotel" / "cheapest hotel": answer directly from Firestore
+    const here = userLocation || {
+      latitude: TOURISM_OFFICE.latitude,
+      longitude: TOURISM_OFFICE.longitude,
+    };
+    const hotelReply =
+      answerHotelQuestion(trimmed, accommodationsData, here) ||
+      answerRestaurantQuestion(trimmed, mergeRestaurants(restaurantsData), here);
+    if (hotelReply) {
+      setMessages((prev) => [
+        ...prev,
+        { id: `${Date.now()}-hotel`, role: "assistant", text: hotelReply },
       ]);
       return;
     }

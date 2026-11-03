@@ -1,0 +1,45 @@
+// San Carlos City Dining Directory (from san_carlos_city_dining_directory.xlsx)
+// Used by the chatbot. Restaurants saved in Firestore ("restaurants") are merged
+// with this list; a Firestore entry with the same name replaces the one here.
+//
+// To make "nearest restaurant" work for an entry, add its coordinates:
+//   location: { lat: 10.4829, lng: 123.4221 }
+export const DINING_DIRECTORY = [
+  { name: "Mom's Small Hotel & Resto", category: "Full-Service & Hotel Restaurants", address: "F.C. Ledesma Avenue", cuisine: "Filipino Viands & Seafood", priceRange: "₱150 - ₱400" },
+  { name: "Carmel's Restaurant", category: "Full-Service & Hotel Restaurants", address: "C.L. Ledesma Sr. Avenue", cuisine: "Filipino Classics & Short Orders", priceRange: "₱120 - ₱350" },
+  { name: "Skyland Hotel & Resto", category: "Full-Service & Hotel Restaurants", address: "Broce St. cor. Endrina St.", cuisine: "Asian & Filipino Hotel Meals", priceRange: "₱150 - ₱400" },
+  { name: "Belladama Cafe & Resto", category: "Full-Service & Hotel Restaurants", address: "Broce St. (Near Public Plaza)", cuisine: "Steak, Pasta, Seafood, Cansi", priceRange: "₱120 - ₱480" },
+  { name: "Bella's Place", category: "Full-Service & Hotel Restaurants", address: "Broce St. / Mondragon St.", cuisine: "Wings, Tacos, Burgers & Rice Bowls", priceRange: "₱80 - ₱350" },
+  { name: "Eric's Tavern", category: "Full-Service & Hotel Restaurants", address: "Locsin St. cor. Burgos St.", cuisine: "Filipino Comfort Food & Inasal", priceRange: "₱100 - ₱300" },
+  { name: "Titing's Cafe & Heritage Resto", category: "Full-Service & Hotel Restaurants", address: "Downtown Heritage District", cuisine: "Native Coffee & Heritage Delicacies", priceRange: "₱60 - ₱200" },
+  { name: "Jorace Fast Food & Resto", category: "Full-Service & Hotel Restaurants", address: "Broce Street", cuisine: "Local Short Orders & Rice Meals", priceRange: "₱80 - ₱200" },
+  { name: "Bahay Bay Resto", category: "Full-Service & Hotel Restaurants", address: "Coastal Area, San Carlos City", cuisine: "Seafood & Native Dishes", priceRange: "₱150 - ₱400" },
+  { name: "Tio Apin's Inasal", category: "Full-Service & Hotel Restaurants", address: "F.C. Ledesma Avenue", cuisine: "Bacolod-Style Chicken Inasal", priceRange: "₱90 - ₱250" },
+  { name: "Dokie's Lechon & Grill", category: "Full-Service & Hotel Restaurants", address: "San Carlos City Center", cuisine: "Lechon Manok, Liempo & BBQ", priceRange: "₱150 - ₱300" },
+  { name: "C's Lechon & Lechon Belly", category: "Full-Service & Hotel Restaurants", address: "Dos Hermanos Street", cuisine: "Lechon Belly & Native Pancit", priceRange: "₱150 - ₱500" },
+  { name: "ALAIA Resto & Lounge", category: "Restobars, Pubs & Nightlife Spots", address: "Locsin St. (Palau Hotel Bldg.)", cuisine: "Modern Asian Fusion & Cocktails", priceRange: "₱180 - ₱500" },
+  { name: "10.9 Restobar & Catering", category: "Restobars, Pubs & Nightlife Spots", address: "Azucena St. cor. Jasmine St.", cuisine: "Crispy Pata, Grilled Seafood & Beer", priceRange: "₱150 - ₱500" },
+  { name: "10.9 Garden Resto", category: "Restobars, Pubs & Nightlife Spots", address: "Azucena Street", cuisine: "Open-Air Dining & Filipino Dishes", priceRange: "₱150 - ₱450" },
+  { name: "Mike's Burgers & Beer", category: "Restobars, Pubs & Nightlife Spots", address: "Azucena St., San Julio Subd.", cuisine: "Gourmet Burgers, Fries & Cold Drinks", priceRange: "₱90 - ₱280" },
+  { name: "Eat n Shoppe Pub", category: "Restobars, Pubs & Nightlife Spots", address: "C.L. Ledesma Avenue", cuisine: "Pub Food, Cold Drinks & Finger Food", priceRange: "₱100 - ₱300" },
+  { name: "Slow Days Cafe & Resto", category: "Restobars, Pubs & Nightlife Spots", address: "San Carlos City Center", cuisine: "Craft Drinks, Coffee & Evening Snacks", priceRange: "₱100 - ₱280" },
+  { name: "Matchmade Cafe", category: "Cafes, Milk Tea & Dessert Shops", address: "South Villa Subdivision", cuisine: "Specialty Coffee, Frappes & Pastries", priceRange: "₱90 - ₱200" },
+  { name: "UYU Milk & Coffee", category: "Cafes, Milk Tea & Dessert Shops", address: "V. Gustilo Street", cuisine: "Milk Tea, Fruit Teas & Coffee", priceRange: "₱60 - ₱160" },
+  { name: "The Sunflower Cafe", category: "Cafes, Milk Tea & Dessert Shops", address: "Near Public Plaza", cuisine: "Silog Meals, Breakfast & Brewed Coffee", priceRange: "₱70 - ₱180" },
+  { name: "Daman-daman Cafe", category: "Cafes, Milk Tea & Dessert Shops", address: "Center Mall, F.C. Ledesma Ave.", cuisine: "Iced Coffee, Milk Tea & Light Snacks", priceRange: "₱60 - ₱150" },
+  { name: "Cooler's Delight", category: "Cafes, Milk Tea & Dessert Shops", address: "Ylagan Street", cuisine: "Halo-Halo, Ice Desserts & Snacks", priceRange: "₱50 - ₱150" },
+  { name: "Patty's Bakeshop & Cafe", category: "Cafes, Milk Tea & Dessert Shops", address: "Valdivia Street", cuisine: "Pastries, Breads & Hot Coffee", priceRange: "₱40 - ₱180" },
+  { name: "Food 2 Go", category: "Cafes, Milk Tea & Dessert Shops", address: "Downtown Area", cuisine: "Takoyaki, Ramen & Japanese Rolls", priceRange: "₱85 - ₱255" },
+  { name: "Merzci Bread & Pastries", category: "Cafes, Milk Tea & Dessert Shops", address: "Downtown San Carlos", cuisine: "Breads, Local Sweets & Snacks", priceRange: "₱40 - ₱200" },
+  { name: "Jollibee (Gaisano Branch)", category: "Pizzerias, Bakeries & Fast Food Chains", address: "Gaisano Capital San Carlos", cuisine: "Chickenjoy, Spaghetti & Burgers", priceRange: "₱50 - ₱250" },
+  { name: "Jollibee (CityMall Branch)", category: "Pizzerias, Bakeries & Fast Food Chains", address: "CityMall San Carlos", cuisine: "Chickenjoy, Spaghetti & Burgers", priceRange: "₱50 - ₱250" },
+  { name: "McDonald's San Carlos", category: "Pizzerias, Bakeries & Fast Food Chains", address: "City Center / National Highway", cuisine: "Burgers, Fries, Chicken & Coffee", priceRange: "₱50 - ₱250" },
+  { name: "Chowking", category: "Pizzerias, Bakeries & Fast Food Chains", address: "CityMall San Carlos", cuisine: "Chinese Meals, Noodles & Dim Sum", priceRange: "₱80 - ₱250" },
+  { name: "Mang Inasal", category: "Pizzerias, Bakeries & Fast Food Chains", address: "CityMall San Carlos", cuisine: "Grilled Chicken Inasal & Halo-Halo", priceRange: "₱100 - ₱220" },
+  { name: "Alberto's Pizza", category: "Pizzerias, Bakeries & Fast Food Chains", address: "San Carlos City Center", cuisine: "Affordable Pizzas & Pasta Bowls", priceRange: "₱100 - ₱300" },
+  { name: "Chooks-to-Go / Dokito", category: "Pizzerias, Bakeries & Fast Food Chains", address: "National Highway / Downtown", cuisine: "Oven-Roasted Chicken & Fried Chicken", priceRange: "₱250 - ₱400" },
+  { name: "C's Pungko Pungko", category: "Local Eateries, Pungko-Pungko & Markets", address: "Park Marina", cuisine: "Silog Meals & Deep-Fried Finger Food", priceRange: "₱50 - ₱150" },
+  { name: "Public Market Carenderias", category: "Local Eateries, Pungko-Pungko & Markets", address: "San Carlos Public Market Complex", cuisine: "Home-cooked Filipino Dishes (Lutong-Bahay)", priceRange: "₱40 - ₱90" },
+  { name: "Park Marina Food Stalls", category: "Local Eateries, Pungko-Pungko & Markets", address: "Park Marina Waterfront Area", cuisine: "Barbecue, Street Food & Refreshments", priceRange: "₱20 - ₱120" },
+  { name: "Barangay Carenderias", category: "Local Eateries, Pungko-Pungko & Markets", address: "Scattered across City Barangays", cuisine: "Affordable Native Viands & Rice Meals", priceRange: "₱30 - ₱80" },
+];

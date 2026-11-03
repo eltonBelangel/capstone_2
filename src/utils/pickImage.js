@@ -3,9 +3,9 @@ import * as ImagePicker from "expo-image-picker";
 
 // Firestore documents are capped at 1 MB, so keep the encoded photo small.
 const MAX_BASE64_CHARS = 700000;
+const MAX_SMALL_BASE64_CHARS = 150000; // for highlight/food photos
 
-// Opens the gallery and returns a data URI ("data:image/jpeg;base64,...") or null.
-export async function pickImageAsDataUri({ aspect = [4, 3] } = {}) {
+export async function pickImageAsDataUri({ aspect = [4, 3], maxWidth = null } = {}) {
   const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!perm.granted) {
     Alert.alert("Permission needed", "Allow photo access to choose an image.");
@@ -16,7 +16,7 @@ export async function pickImageAsDataUri({ aspect = [4, 3] } = {}) {
     mediaTypes: ["images"],
     allowsEditing: true,
     aspect,
-    quality: 0.5,
+    quality: maxWidth ? 0.2 : 0.5,
     base64: true,
   });
 
@@ -27,7 +27,9 @@ export async function pickImageAsDataUri({ aspect = [4, 3] } = {}) {
     Alert.alert("Could not read photo", "Try a different photo.");
     return null;
   }
-  if (asset.base64.length > MAX_BASE64_CHARS) {
+
+  const limit = maxWidth ? MAX_SMALL_BASE64_CHARS : MAX_BASE64_CHARS;
+  if (asset.base64.length > limit) {
     Alert.alert("Photo too large", "Choose a smaller photo or crop it tighter.");
     return null;
   }

@@ -49,6 +49,25 @@ export default function PackageDetailScreen({ navigation, route }) {
     legs.reduce((sum, l) => sum + (Number(l.estimatedPrice) || 0), 0);
   const duration = pkg?.durationEstimate || pkg?.duration;
 
+  const contacts = Array.isArray(pkg?.contactNumbers) ? pkg.contactNumbers.filter(Boolean) : [];
+  const highlights = Array.isArray(pkg?.highlights) ? pkg.highlights.filter((h) => h?.name || h?.imageUrl) : [];
+  const inclusions = Array.isArray(pkg?.inclusions) ? pkg.inclusions.filter(Boolean) : [];
+
+  const callNumber = (num) => {
+    Linking.openURL(`tel:${num}`).catch(() => Alert.alert("Can't call", num));
+  };
+
+  const textNumber = (num) => {
+    Linking.openURL(`sms:${num}`).catch(() => Alert.alert("Can't open messages", num));
+  };
+
+  const openFacebook = () => {
+    const q = encodeURIComponent(pkg.facebook);
+    Linking.openURL(`https://www.facebook.com/search/top?q=${q}`).catch(() =>
+      Alert.alert("Can't open Facebook", pkg.facebook)
+    );
+  };
+
   const callOffice = () => {
     if (!TOURISM_OFFICE.phone) {
       Alert.alert("No number", "The tourism office number is not set yet.");
@@ -165,6 +184,72 @@ export default function PackageDetailScreen({ navigation, route }) {
           </View>
         ) : null}
 
+        {/* Highlights */}
+        {highlights.length > 0 ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Highlights</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hlRow}>
+              {highlights.map((h, i) => (
+                <View key={i} style={styles.hlCard}>
+                  {h.imageUrl ? (
+                    <Image source={{ uri: h.imageUrl }} style={styles.hlImage} />
+                  ) : (
+                    <View style={[styles.hlImage, styles.hlPlaceholder]}>
+                      <Ionicons name="sparkles-outline" size={22} color={C.purple} />
+                    </View>
+                  )}
+                  <Text style={styles.hlName} numberOfLines={2}>{h.name}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
+
+        {/* Inclusions */}
+        {inclusions.length > 0 ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Inclusions</Text>
+            {inclusions.map((item, i) => (
+              <View key={i} style={styles.inclRow}>
+                <Ionicons name="checkmark-circle" size={18} color={C.purple} />
+                <Text style={styles.inclText}>{item}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {/* Contact */}
+        {contacts.length > 0 || pkg?.facebook || pkg?.address ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Contact</Text>
+            {pkg?.address ? (
+              <View style={styles.inclRow}>
+                <Ionicons name="location-outline" size={18} color={C.muted} />
+                <Text style={styles.inclText}>{pkg.address}</Text>
+              </View>
+            ) : null}
+            {contacts.map((num) => (
+              <View key={num} style={styles.contactRow}>
+                <Ionicons name="call-outline" size={18} color={C.muted} />
+                <Text style={[styles.inclText, styles.flex]}>{num}</Text>
+                <TouchableOpacity style={styles.contactBtn} onPress={() => callNumber(num)}>
+                  <Text style={styles.contactBtnText}>Call</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.contactBtn} onPress={() => textNumber(num)}>
+                  <Text style={styles.contactBtnText}>Text</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+            {pkg?.facebook ? (
+              <TouchableOpacity style={styles.contactRow} onPress={openFacebook}>
+                <Ionicons name="logo-facebook" size={18} color={C.muted} />
+                <Text style={[styles.inclText, styles.flex]}>{pkg.facebook}</Text>
+                <Text style={styles.contactBtnText}>Open</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
+
         {/* Notice */}
         <View style={styles.notice}>
           <Ionicons name="information-circle-outline" size={18} color={C.amber} />
@@ -175,9 +260,20 @@ export default function PackageDetailScreen({ navigation, route }) {
         </View>
 
         {/* Actions */}
-        <TouchableOpacity style={styles.primaryBtn} onPress={callOffice} activeOpacity={0.85}>
-          <Ionicons name="call-outline" size={16} color="#FFFFFF" />
-          <Text style={styles.primaryText}>Call tourism office</Text>
+        {contacts.length > 0 ? (
+          <TouchableOpacity style={styles.primaryBtn} onPress={() => callNumber(contacts[0])} activeOpacity={0.85}>
+            <Ionicons name="call-outline" size={16} color="#FFFFFF" />
+            <Text style={styles.primaryText}>Call {contacts[0]}</Text>
+          </TouchableOpacity>
+        ) : null}
+
+        <TouchableOpacity
+          style={contacts.length > 0 ? styles.secondaryBtn : styles.primaryBtn}
+          onPress={callOffice}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="call-outline" size={16} color={contacts.length > 0 ? C.purple : "#FFFFFF"} />
+          <Text style={contacts.length > 0 ? styles.secondaryText : styles.primaryText}>Call tourism office</Text>
         </TouchableOpacity>
 
         {spot?.latitude && spot?.longitude ? (
@@ -254,6 +350,22 @@ const styles = StyleSheet.create({
   legTitle: { fontSize: 15, fontWeight: "700", color: C.text },
   legMeta: { fontSize: 13, color: C.muted, marginTop: 2 },
   estimate: { fontSize: 14, fontWeight: "800", color: C.text, marginTop: 4 },
+
+  hlRow: { gap: 12, paddingRight: 6 },
+  hlCard: { width: 140 },
+  hlImage: { width: 140, height: 105, borderRadius: 12 },
+  hlPlaceholder: { backgroundColor: C.purpleSoft, justifyContent: "center", alignItems: "center" },
+  hlName: { marginTop: 6, fontSize: 13, fontWeight: "700", color: C.text },
+  inclRow: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 },
+  inclText: { fontSize: 14, color: C.text },
+  contactRow: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 },
+  contactBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: C.purpleSoft,
+  },
+  contactBtnText: { color: C.purple, fontSize: 12, fontWeight: "700" },
 
   notice: {
     flexDirection: "row",

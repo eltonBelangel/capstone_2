@@ -54,6 +54,11 @@ const STARTER_PACKAGES = [
     duration: "",
     roundTrip: false,
     legs: [{ vehicleType: "Trek", fromSpot: "Barangay Prosperidad", toSpot: "Mayana Peak" }],
+    contactNumbers: ["09851615477"],
+    facebook: "Mayana Peak",
+    address: "Barangay Prosperidad",
+    highlights: [{ name: "Native coffee", imageUrl: null }, { name: "Alupi", imageUrl: null }, { name: "Budbod", imageUrl: null }],
+    inclusions: ["Local tour guide", "Native coffee", "Alupi", "Budbod"],
   },
   {
     spot: "Sipaway Island",
@@ -67,6 +72,10 @@ const STARTER_PACKAGES = [
       { vehicleType: "Land transportation", fromSpot: "Sipaway pier", toSpot: "Balete Tree, Nigad Forest, SETWA Beach, Lighthouse" },
       { vehicleType: "Boat", fromSpot: "Sipaway Island", toSpot: "Mainland pier" },
     ],
+    contactNumbers: ["09260827472", "09859743352"],
+    facebook: "Sipaway Eco-tourism",
+    highlights: [{ name: "Century Old Balete Tree", imageUrl: null }, { name: "Nigad Forest", imageUrl: null }, { name: "SETWA Beach (lunch)", imageUrl: null }, { name: "Lighthouse", imageUrl: null }],
+    inclusions: ["Environmental fee", "Boat service back and forth", "Local tour guide", "Land transportation", "Lunch", "Afternoon snacks"],
   },
   {
     spot: "Sipaway Island",
@@ -80,6 +89,10 @@ const STARTER_PACKAGES = [
       { vehicleType: "Land transportation", fromSpot: "Sipaway pier", toSpot: "Balete Tree, Nigad Forest, SETWA Beach, Cocolane" },
       { vehicleType: "Boat", fromSpot: "Sipaway Island", toSpot: "Mainland pier" },
     ],
+    contactNumbers: ["09260827472", "09859743352"],
+    facebook: "Sipaway Eco-tourism",
+    highlights: [{ name: "Century Old Balete Tree", imageUrl: null }, { name: "Nigad Forest", imageUrl: null }, { name: "Danggit deboning and tuba making", imageUrl: null }, { name: "SETWA Beach", imageUrl: null }, { name: "Cocolane food demo (bukayo and salbaro)", imageUrl: null }],
+    inclusions: ["Environmental fee", "Boat service back and forth", "Local tour guide", "Land transportation", "Lunch", "Afternoon snacks"],
   },
   {
     spot: "Sipaway Island",
@@ -89,6 +102,10 @@ const STARTER_PACKAGES = [
     duration: "",
     roundTrip: false,
     legs: [{ vehicleType: "Boat", fromSpot: "Mainland pier", toSpot: "Sipaway Island" }],
+    contactNumbers: ["09260827472", "09859743352"],
+    facebook: "Sipaway Eco-tourism",
+    highlights: [{ name: "White sand beaches", imageUrl: null }, { name: "Mangroves", imageUrl: null }, { name: "Island culture", imageUrl: null }],
+    inclusions: ["Accommodation", "Local guides", "Land transportation", "Meals showcasing local flavors"],
   },
 ];
 
@@ -103,8 +120,26 @@ const EMPTY_FORM = {
   spotName: "",
   roundTrip: false,
   imageUrl: null,
+  contactNumbers: "", // one per line or separated by commas
+  facebook: "",
+  address: "",
+  inclusions: "", // one per line
+  highlights: [], // [{ name, imageUrl }]
   legs: [emptyLeg()],
 };
+
+const emptyHighlight = () => ({ name: "", imageUrl: null });
+
+// "0926..., 0985..." or one per line -> ["0926...", "0985..."]
+const splitList = (text) =>
+  (text || "")
+    .split(/[\n,]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+// Firestore documents are capped at 1 MB. Photos are stored inside the document,
+// so check the total before saving.
+const MAX_DOC_CHARS = 900000;
 
 // Reusable labelled input
 function Field({ label, multiline, small, ...inputProps }) {
@@ -158,6 +193,24 @@ export default function AdminPackagesScreen({ navigation }) {
       legs: f.legs.map((l, i) => (i === index ? { ...l, [key]: value } : l)),
     }));
 
+  const setHighlight = (index, key, value) =>
+    setForm((f) => ({
+      ...f,
+      highlights: f.highlights.map((h, i) => (i === index ? { ...h, [key]: value } : h)),
+    }));
+
+  const addHighlight = () =>
+    setForm((f) => ({ ...f, highlights: [...f.highlights, emptyHighlight()] }));
+
+  const removeHighlight = (index) =>
+    setForm((f) => ({ ...f, highlights: f.highlights.filter((_, i) => i !== index) }));
+
+  const pickHighlightPhoto = async (index) => {
+    // Small photo (600px wide) so many of them fit in one package
+    const uri = await pickImageAsDataUri({ aspect: [4, 3], maxWidth: 600 });
+    if (uri) setHighlight(index, "imageUrl", uri);
+  };
+
   const addLeg = () => setForm((f) => ({ ...f, legs: [...f.legs, emptyLeg()] }));
 
   const removeLeg = (index) =>
@@ -178,17 +231,22 @@ export default function AdminPackagesScreen({ navigation }) {
       return;
     }
 
-    const toAdd = STARTER_PACKAGES.filter(
-      (p) => !packages.some((x) => x.name?.trim().toLowerCase() === p.name.toLowerCase())
-    );
-    if (toAdd.length === 0) {
-      Alert.alert("Already added", "These packages are already in the list.");
+    const exists = (p) =>
+      packages.find((x) => x.name?.trim().toLowerCase() === p.name.toLowerCase());
+    const toAdd = STARTER_PACKAGES.filter((p) => !exists(p));
+    // Packages imported earlier that don't have contacts/highlights yet
+    const toUpdate = STARTER_PACKAGES.filter((p) => {
+      const found = exists(p);
+      return found && !found.highlights && !found.contactNumbers;
+    });
+    if (toAdd.length === 0 && toUpdate.length === 0) {
+      Alert.alert("Already added", "These packages are already up to date.");
       return;
     }
 
     Alert.alert(
-      `Import ${toAdd.length} packages`,
-      "Add the Mayana Peak and Sipaway packages? Prices start at 0, so edit them after. You can add photos by editing each package.",
+      "Import brochure packages",
+      `${toAdd.length} new and ${toUpdate.length} existing packages will get contact numbers, highlights and inclusions. Prices and photos you already set are kept. You can add food photos by editing each package.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -196,6 +254,16 @@ export default function AdminPackagesScreen({ navigation }) {
           onPress: async () => {
             setImporting(true);
             try {
+              for (const p of toUpdate) {
+                await updateDoc(doc(db, "tripPackages", exists(p).id), {
+                  contactNumbers: p.contactNumbers || [],
+                  facebook: p.facebook || "",
+                  address: p.address || "",
+                  highlights: p.highlights || [],
+                  inclusions: p.inclusions || [],
+                  updatedAt: new Date(),
+                });
+              }
               for (const p of toAdd) {
                 const spot = findSpot(p.spot);
                 await addDoc(collection(db, "tripPackages"), {
@@ -209,6 +277,11 @@ export default function AdminPackagesScreen({ navigation }) {
                   spotName: spot.name,
                   roundTrip: p.roundTrip,
                   imageUrl: null,
+                  contactNumbers: p.contactNumbers || [],
+                  facebook: p.facebook || "",
+                  address: p.address || "",
+                  highlights: p.highlights || [],
+                  inclusions: p.inclusions || [],
                   legs: p.legs.map((l) => ({
                     vehicleType: l.vehicleType,
                     fromSpot: l.fromSpot,
@@ -221,7 +294,7 @@ export default function AdminPackagesScreen({ navigation }) {
                   updatedAt: new Date(),
                 });
               }
-              Alert.alert("Done", `${toAdd.length} packages added.`);
+              Alert.alert("Done", "Packages imported.");
             } catch {
               Alert.alert("Import stopped", "Some packages may not have been added. Check the list before importing again.");
             } finally {
@@ -250,6 +323,11 @@ export default function AdminPackagesScreen({ navigation }) {
       spotName: pkg.spotName || "",
       roundTrip: !!pkg.roundTrip,
       imageUrl: pkg.imageUrl || null,
+      contactNumbers: (pkg.contactNumbers || []).join("\n"),
+      facebook: pkg.facebook || "",
+      address: pkg.address || "",
+      inclusions: (pkg.inclusions || []).join("\n"),
+      highlights: (pkg.highlights || []).map((h) => ({ name: h.name || "", imageUrl: h.imageUrl || null })),
       legs: pkg.legs?.length
         ? pkg.legs.map((l) => ({
             vehicleType: l.vehicleType || "",
@@ -306,9 +384,24 @@ export default function AdminPackagesScreen({ navigation }) {
       spotName: form.spotName,
       roundTrip: form.roundTrip,
       imageUrl: form.imageUrl || null,
+      contactNumbers: splitList(form.contactNumbers),
+      facebook: form.facebook.trim(),
+      address: form.address.trim(),
+      inclusions: form.inclusions.split("\n").map((x) => x.trim()).filter(Boolean),
+      highlights: form.highlights
+        .filter((h) => h.name.trim() || h.imageUrl)
+        .map((h) => ({ name: h.name.trim(), imageUrl: h.imageUrl || null })),
       legs,
       updatedAt: new Date(),
     };
+
+    if (JSON.stringify(payload).length > MAX_DOC_CHARS) {
+      Alert.alert(
+        "Too many photos",
+        "This package is too big to save. Remove a photo or two and try again."
+      );
+      return;
+    }
 
     setSaving(true);
     try {
@@ -499,6 +592,47 @@ export default function AdminPackagesScreen({ navigation }) {
             <Field label="Package name" value={form.name} onChangeText={(v) => set("name", v)} placeholder="Island hopping adventure" />
             <Field label="Description" multiline value={form.description} onChangeText={(v) => set("description", v)} placeholder="What this package includes" />
 
+
+            <Text style={styles.label}>Contact</Text>
+            <Field small label="Phone numbers (one per line)" multiline value={form.contactNumbers} onChangeText={(v) => set("contactNumbers", v)} placeholder={"09260827472\n09859743352"} />
+            <Field small label="Facebook page" value={form.facebook} onChangeText={(v) => set("facebook", v)} placeholder="Sipaway Eco-tourism" autoCapitalize="none" />
+            <Field small label="Address / meeting point" value={form.address} onChangeText={(v) => set("address", v)} placeholder="Barangay Prosperidad" />
+
+            <View style={styles.legsHead}>
+              <Text style={styles.sectionTitle}>Highlights</Text>
+              <TouchableOpacity onPress={addHighlight} hitSlop={8}>
+                <Text style={styles.link}>+ Add highlight</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.hint}>Snacks, food, or places guests will enjoy. Add a photo for each.</Text>
+
+            {form.highlights.map((h, index) => (
+              <View key={index} style={styles.legCard}>
+                <View style={styles.rowBetween}>
+                  <Text style={styles.legTitle}>Highlight {index + 1}</Text>
+                  <TouchableOpacity onPress={() => removeHighlight(index)} hitSlop={8}>
+                    <Text style={styles.danger}>Remove</Text>
+                  </TouchableOpacity>
+                </View>
+                <Field small label="Name" value={h.name} onChangeText={(v) => setHighlight(index, "name", v)} placeholder="Native coffee, Alupi, Budbod..." />
+                {h.imageUrl ? (
+                  <View>
+                    <Image source={{ uri: h.imageUrl }} style={styles.hlPreview} />
+                    <TouchableOpacity style={styles.removePhoto} onPress={() => setHighlight(index, "imageUrl", null)}>
+                      <Text style={styles.danger}>Remove photo</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <TouchableOpacity style={[styles.photoPicker, styles.hlPicker]} onPress={() => pickHighlightPhoto(index)}>
+                    <Ionicons name="camera-outline" size={20} color={C.purple} />
+                    <Text style={styles.photoPickerText}>Add photo</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            ))}
+
+            <Field label="Inclusions (one per line)" multiline value={form.inclusions} onChangeText={(v) => set("inclusions", v)} placeholder={"Environmental fee\nLocal tour guide\nLunch"} />
+
             <View style={styles.inline}>
               <View style={[styles.flex, { marginRight: 6 }]}>
                 <Field label="Total price (₱)" value={form.price} onChangeText={(v) => set("price", v)} placeholder="0" keyboardType="numeric" />
@@ -569,6 +703,21 @@ export default function AdminPackagesScreen({ navigation }) {
             renderItem={renderPackage}
             contentContainerStyle={styles.list}
             showsVerticalScrollIndicator={false}
+            ListFooterComponent={
+              packages.length > 0 ? (
+                <TouchableOpacity
+                  style={[styles.importBtn, importing && styles.disabled]}
+                  onPress={importStarter}
+                  disabled={importing}
+                >
+                  {importing ? (
+                    <ActivityIndicator color={C.muted} size="small" />
+                  ) : (
+                    <Text style={styles.importText}>Add contacts and highlights from brochures</Text>
+                  )}
+                </TouchableOpacity>
+              ) : null
+            }
             ListEmptyComponent={
               <View style={styles.empty}>
                 <Text style={styles.emptyTitle}>No packages yet</Text>
@@ -738,6 +887,8 @@ const styles = StyleSheet.create({
   },
   photoPickerText: { color: C.purple, fontSize: 14, fontWeight: "700" },
   preview: { width: "100%", height: 180, borderRadius: 14 },
+  hlPreview: { width: "100%", height: 140, borderRadius: 10, marginTop: 10 },
+  hlPicker: { height: 70, marginTop: 10 },
   removePhoto: { alignSelf: "flex-end", marginTop: 8 },
 
   // Spot chips
