@@ -9,8 +9,8 @@ export const TOURISM_OFFICE = {
   name: "Municipal Tourism Office",
   description: "Visit for official guides, permits, and local information.",
   // Example: near Sipaway / San Carlos area — UPDATE THESE
-  latitude: 10.4822,
-  longitude: 123.4115,
+  latitude:  10.492906,
+  longitude:  123.409804,
   address: "Municipal Hall, Tourism Desk",
   phone: "",
   hours: "Mon–Fri 8:00 AM – 5:00 PM",

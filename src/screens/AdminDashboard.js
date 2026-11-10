@@ -40,6 +40,7 @@ import { auth, db } from "../../firebaseConfig";
 import { signOut } from "firebase/auth";
 import * as ImagePicker from "expo-image-picker";
 import { Ionicons } from "@expo/vector-icons";
+import { DINING_DIRECTORY } from "../constants/sanCarlosDining";
 
 const { width: W } = Dimensions.get("window");
 const SIDEBAR_W = Math.min(280, W * 0.78);
@@ -66,11 +67,10 @@ const C = {
 const NAV_ITEMS = [
   { id: "overview", label: "Overview", icon: "grid-outline" },
   { id: "users", label: "Users", icon: "people-outline", table: "users" },
-  { id: "owners", label: "Owners", icon: "storefront-outline", table: "owners" },
-  { id: "vehicles", label: "Vehicles", icon: "car-outline", table: "vehicles" },
   { id: "spots", label: "Tourist spots", icon: "location-outline", table: "spots" },
   { id: "packages", label: "Trip packages", icon: "map-outline", route: "AdminPackages" },
   { id: "hotels", label: "Partner hotels", icon: "bed-outline", route: "AdminHotels" },
+  { id: "restaurants", label: "Restaurants", icon: "restaurant-outline", route: "AdminRestaurants" },
   { id: "addSpot", label: "Add tourist spot", icon: "add-circle-outline", action: "addSpot" },
 ];
 
@@ -81,6 +81,7 @@ export default function AdminDashboard({ navigation }) {
   const [spots, setSpots] = useState([]);
   const [hotels, setHotels] = useState([]);
   const [packages, setPackages] = useState([]);
+  const [savedRestaurants, setSavedRestaurants] = useState([]);
 
   const [activeTable, setActiveTable] = useState(null);
   const [activeNav, setActiveNav] = useState("overview");
@@ -224,6 +225,11 @@ export default function AdminDashboard({ navigation }) {
           collection(db, "tripPackages"),
           (s) => !cancelled && setPackages(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
           (e) => console.error("Packages", e)
+        ));
+        add(onSnapshot(
+          collection(db, "restaurants"),
+          (s) => !cancelled && setSavedRestaurants(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+          (e) => console.error("Restaurants", e)
         ));
 
         unsubscribers.current = localUnsubscribers;
@@ -444,13 +450,19 @@ export default function AdminDashboard({ navigation }) {
 
   const navCount = (id) => {
     if (id === "users") return users.length;
-    if (id === "owners") return owners.length;
-    if (id === "vehicles") return vehicles.length;
     if (id === "spots") return spots.length;
     if (id === "packages") return packages.length;
     if (id === "hotels") return hotels.length;
+    if (id === "restaurants") return restaurantCount;
     return null;
   };
+
+  // Spreadsheet restaurants plus saved ones, counting each name once
+  const restaurantCount = new Set(
+    [...DINING_DIRECTORY, ...savedRestaurants].map((r) =>
+      String(r.name || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+    )
+  ).size;
 
   const renderTableRow = (item, collectionName) => {
     const name = item.username || item.name || item.category || "Untitled";
@@ -600,13 +612,17 @@ export default function AdminDashboard({ navigation }) {
             {[
               { label: "Users", value: users.length, table: "users" },
               { label: "Owners", value: owners.length, table: "owners" },
-              { label: "Vehicles", value: vehicles.length, table: "vehicles" },
+              { label: "Restaurants", value: restaurantCount, route: "AdminRestaurants" },
               { label: "Spots", value: spots.length, table: "spots" },
             ].map((s) => (
               <TouchableOpacity
                 key={s.label}
                 style={styles.statCard}
                 onPress={() => {
+                  if (s.route) {
+                    navigation.navigate(s.route);
+                    return;
+                  }
                   setActiveTable(s.table);
                   setActiveNav(s.table);
                 }}

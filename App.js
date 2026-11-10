@@ -14,12 +14,13 @@ import Paymentscreen from './src/screens/Paymentscreen';
 import AdminDashboard from './src/screens/AdminDashboard';
 import AvailableVehiclesScreen from './src/screens/AvailableVehiclesScreen';
 import Accountscreen from './src/screens/AccountScreen';
-import NotificationsScreen from './src/screens/Notificationsscreen';
 import BookingDetailScreen from './src/screens/Bookingdetailsscreen';
+import NotificationsScreen from './src/screens/Notificationsscreen';
 import ChatScreen from "./src/screens/ChatScreen";
 import PackageDetailScreen from "./src/screens/PackageDetailScreen";
 import AdminPackagesScreen from "./src/screens/AdminPackagesScreen";
 import AdminHotelsScreen from "./src/screens/AdminHotelsScreen";
+import AdminRestaurantsScreen from "./src/screens/AdminRestaurantsScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -42,13 +43,14 @@ export default function App() {
           <Stack.Screen name="AdminDashboard" component={AdminDashboard} />
           <Stack.Screen name="Payment" component={Paymentscreen} />
           <Stack.Screen name="BookingDetail" component={BookingDetailScreen} />
+          <Stack.Screen name="Notifications" component={NotificationsScreen} />
           <Stack.Screen name="OwnerDashboard" component={OwnerDashboard} />
           <Stack.Screen name="AvailableVehiclesScreen" component={AvailableVehiclesScreen} />
-          <Stack.Screen name="Notifications" component={NotificationsScreen} />
           <Stack.Screen name="AddVehicle" component={AddVehicleScreen} />
           <Stack.Screen name="PackageDetail" component={PackageDetailScreen} />
           <Stack.Screen name="AdminPackages" component={AdminPackagesScreen} />
           <Stack.Screen name="AdminHotels" component={AdminHotelsScreen} />
+          <Stack.Screen name="AdminRestaurants" component={AdminRestaurantsScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </KeyboardProvider>

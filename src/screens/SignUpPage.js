@@ -170,9 +170,11 @@ export default function SignUpPage({ navigation }) {
       >
         <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
           <View style={styles.formArea}>
-            <Text style={styles.formTitle}>Enter your code</Text>
+            <Text style={styles.formTitle}>Verify your email</Text>
             <Text style={styles.formSubtitle}>
-              We sent a 6-digit code to {email.trim().toLowerCase()}
+              Step 2 of 2: we sent a 6-digit verification code to{" "}
+              {email.trim().toLowerCase()}. Enter it below to complete your registration. The
+              code expires in 5 minutes.
             </Text>
 
             <TextInput
@@ -233,7 +235,9 @@ export default function SignUpPage({ navigation }) {
       >
         <View style={styles.formArea}>
           <Text style={styles.formTitle}>Create Account</Text>
-          <Text style={styles.formSubtitle}>Fill in your details to get started</Text>
+          <Text style={styles.formSubtitle}>
+            Step 1 of 2: enter your details. You will verify your email in the next step.
+          </Text>
 
           <View style={styles.inputGroup}>
             <Text style={styles.fieldLabel}>USERNAME</Text>
@@ -295,6 +299,15 @@ export default function SignUpPage({ navigation }) {
             </View>
           </View>
 
+          <View style={styles.noticeBox}>
+            <Text style={styles.noticeTitle}>Email verification required</Text>
+            <Text style={styles.noticeText}>
+              After you submit, we will send a 6-digit verification code (OTP) to your email
+              address. You will need to enter it on the next screen to complete your
+              registration.
+            </Text>
+          </View>
+
           <TouchableOpacity
             style={[styles.button, sending && styles.disabled]}
             onPress={sendCode}
@@ -303,7 +316,7 @@ export default function SignUpPage({ navigation }) {
             {sending ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={styles.buttonText}>Send verification code</Text>
+              <Text style={styles.buttonText}>Submit</Text>
             )}
           </TouchableOpacity>
 
@@ -370,6 +383,17 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 20,
   },
+  noticeBox: {
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginTop: 4,
+  },
+  noticeTitle: { fontSize: 13, fontWeight: "700", color: "#1E40AF", marginBottom: 4 },
+  noticeText: { fontSize: 13, lineHeight: 19, color: "#1E3A8A" },
   buttonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700", letterSpacing: 0.3 },
   disabled: { opacity: 0.6 },
   codeActions: { flexDirection: "row", justifyContent: "space-between", marginTop: 4 },

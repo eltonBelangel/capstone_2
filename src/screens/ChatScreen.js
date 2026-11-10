@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   View,
   Text,
@@ -10,12 +10,21 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  Linking,
+  Alert,
+  StatusBar,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 import { db } from "../../firebaseConfig";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, doc, updateDoc, increment } from "firebase/firestore";
 import * as Location from "expo-location";
 import { TOURISM_OFFICE } from "../constants/tourismOffice";
+import { requestDirections } from "../utils/directionsBus";
 import { DINING_DIRECTORY } from "../constants/sanCarlosDining";
 
 // ==========================================
@@ -54,70 +63,91 @@ const formatKm = (km) =>
   km == null ? "" : km < 1 ? `${Math.round(km * 1000)} m away` : `${km.toFixed(1)} km away`;
 
 // ==========================================
-// HOTEL QUESTIONS ANSWERED BY CODE (not by the AI)
-// "nearest hotel" / "cheapest hotel" are exact calculations, so the app
-// computes them from Firestore directly instead of asking Gemini to guess.
+// MAP-STYLE COLORS (same look as the hotel cards on the map screen)
+// ==========================================
+const C = {
+  navy: "#2F7A3E",       // header and main dark (deep green)
+  purple: "#2F7A3E",     // accent for links, icons and buttons (deep green)
+  purpleSoft: "#FFF1BF", // soft gold background
+  green: "#3E9B4F",
+  greenSoft: "#E6FBEC",
+  gold: "#FFC62E",
+  bg: "#FBF7EC",         // warm cream page background
+  text: "#1B2A1F",
+  muted: "#5F6B5F",
+  faint: "#94A3B8",
+  border: "#E8DFC7",
+};
+
+// ==========================================
+// SMALL HELPERS (same behavior as in MapScreen)
+// ==========================================
+const peso = (n) => `₱${Number(n).toLocaleString()}`;
+
+const normalizeUrl = (u) => {
+  const t = u ? String(u).trim() : "";
+  if (!t) return null;
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+};
+
+const openLink = async (url) => {
+  try {
+    await Linking.openURL(url);
+  } catch {
+    Alert.alert("Can't open link", url);
+  }
+};
+
+// "0927 697 3031 / 0969 545 9405" -> first number only
+const firstPhone = (p) => (p || "").split("/")[0].replace(/[^\d+]/g, "");
+
+// Hotels / restaurants save { location: {lat, lng} }; spots may use either form
+const getCoords = (item) => {
+  const rawLat = item.location?.lat ?? item.latitude;
+  const rawLng = item.location?.lng ?? item.longitude;
+  if (rawLat == null || rawLng == null || rawLat === "" || rawLng === "") return null;
+  const lat = Number(rawLat);
+  const lng = Number(rawLng);
+  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+};
+
+// Adds `km` (distance from the user) to every item
+const withKm = (list, here) =>
+  list.map((item) => {
+    const c = getCoords(item);
+    return {
+      ...item,
+      km: c ? getDistanceKm(here.latitude, here.longitude, c.lat, c.lng) : null,
+    };
+  });
+
+const byDistance = (a, b) => {
+  if (a.km == null && b.km == null) return 0;
+  if (a.km == null) return 1;
+  if (b.km == null) return -1;
+  return a.km - b.km;
+};
+
+// ==========================================
+// PLACE QUESTIONS ANSWERED BY CODE (not by the AI)
+// "hotels in San Carlos", "nearest cafe", "tourist spots", "cheapest hotel"...
+// The app builds the answer from Firestore and returns tappable CARDS,
+// exactly like the lists on the map screen.
 // ==========================================
 const HOTEL_WORDS = /\b(hotels?|inns?|resorts?|pension|lodg(e|ing)s?|accommodations?|places? to stay|where to stay|stay)\b/i;
 const NEAREST_WORDS = /\b(nearest|closest|near ?by|near me|near)\b/i;
 const CHEAPEST_WORDS = /\b(cheapest|cheap|lowest|least expensive|most affordable|affordable|budget)\b/i;
+const SPOT_WORDS = /\b(tourist spots?|tourist attractions?|attractions?|spots?|beach(es)?|falls?|waterfalls?|parks?|islands?|places? to (visit|go)|things to do|destinations?|sightseeing|landmarks?)\b/i;
+const RESTO_WORDS = /\b(restaurants?|restos?|food|eat|eats|eatery|eateries|dining|dine|cafes?|coffee|milk ?tea|dessert|bakery|bakeries|pizza|fast ?food|bars?|restobars?|pubs?|nightlife|carenderias?|pungko|street food)\b/i;
 
-const peso = (n) => `₱${Number(n).toLocaleString()}`;
+// Optional narrowing, matched against the directory category
+const RESTO_CATEGORIES = [
+  [/\b(cafes?|coffee|milk ?tea|dessert)\b/i, "Cafes", "cafes & dessert shops"],
+  [/\b(fast ?food|pizza|bakery|bakeries)\b/i, "Pizzerias", "fast food, pizza & bakeries"],
+  [/\b(bars?|restobars?|pubs?|nightlife)\b/i, "Restobars", "restobars & pubs"],
+  [/\b(carenderias?|pungko|street food|market)\b/i, "Local Eateries", "local eateries"],
+];
 
-const hotelLine = (h, i, extra) =>
-  `${i + 1}. ${h.name || "Unnamed hotel"}${extra ? ` (${extra})` : ""}` +
-  `${h.priceFrom ? `, from ${peso(h.priceFrom)}/night` : ""}` +
-  `${h.address ? `\n   📍 ${h.address}` : ""}` +
-  `${h.phone ? `\n   📞 ${h.phone}` : ""}`;
-
-// Returns reply text, or null when the message is not a simple nearest/cheapest hotel question
-const answerHotelQuestion = (text, hotels, here) => {
-  if (!HOTEL_WORDS.test(text) || hotels.length === 0) return null;
-
-  const wantsNearest = NEAREST_WORDS.test(text);
-  const wantsCheapest = CHEAPEST_WORDS.test(text);
-
-  // Both at once ("cheapest hotel near me") goes to the AI, which gets the ranked lists
-  if (wantsNearest === wantsCheapest) return null;
-
-  if (wantsCheapest) {
-    const ranked = hotels
-      .filter((h) => Number(h.priceFrom) > 0)
-      .sort((a, b) => Number(a.priceFrom) - Number(b.priceFrom))
-      .slice(0, 3);
-    if (ranked.length === 0) return "I don't have any hotel prices yet. 😊";
-    return (
-      `Here are the cheapest hotels in San Carlos 💸\n\n` +
-      ranked.map((h, i) => hotelLine(h, i)).join("\n\n") +
-      `\n\nPrices are starting rates per night.`
-    );
-  }
-
-  const ranked = hotels
-    .map((h) => {
-      const lat = h.location?.lat;
-      const lng = h.location?.lng;
-      const km =
-        typeof lat === "number" && typeof lng === "number"
-          ? getDistanceKm(here.latitude, here.longitude, lat, lng)
-          : null;
-      return { ...h, km };
-    })
-    .filter((h) => h.km != null)
-    .sort((a, b) => a.km - b.km)
-    .slice(0, 3);
-  if (ranked.length === 0)
-    return "I can't tell which hotel is nearest yet because no hotel has a location saved. 😊";
-  return (
-    `Here are the nearest hotels to you 📍\n\n` +
-    ranked.map((h, i) => hotelLine(h, i, formatKm(h.km))).join("\n\n")
-  );
-};
-
-// ==========================================
-// RESTAURANT QUESTIONS ANSWERED BY CODE
-// Data = dining directory (spreadsheet) merged with Firestore "restaurants"
-// ==========================================
 const normName = (n) => String(n || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 // Directory first, then Firestore entries (which win when the name matches)
@@ -141,72 +171,346 @@ const parsePriceRange = (text) => {
   return { min: Math.min(...v), max: Math.max(...v) };
 };
 
-const RESTO_WORDS = /\b(restaurants?|restos?|food|eat|eats|eatery|eateries|dining|dine|cafes?|coffee|milk ?tea|dessert|bakery|bakeries|pizza|fast ?food|bars?|restobars?|pubs?|nightlife|carenderias?|pungko|street food)\b/i;
-
-// Optional narrowing, matched against the directory category
-const RESTO_CATEGORIES = [
-  [/\b(cafes?|coffee|milk ?tea|dessert)\b/i, "Cafes", "cafes & dessert shops"],
-  [/\b(fast ?food|pizza|bakery|bakeries)\b/i, "Pizzerias", "fast food, pizza & bakeries"],
-  [/\b(bars?|restobars?|pubs?|nightlife)\b/i, "Restobars", "restobars & pubs"],
-  [/\b(carenderias?|pungko|street food|market)\b/i, "Local Eateries", "local eateries"],
-];
-
-const restoLine = (r, i, extra) =>
-  `${i + 1}. ${r.name || "Unnamed place"}${extra ? ` (${extra})` : ""}` +
-  `${r.priceRange ? `, ${r.priceRange}` : ""}` +
-  `${r.cuisine ? `\n   🍽️ ${r.cuisine}` : ""}` +
-  `${r.address ? `\n   📍 ${r.address}` : ""}`;
-
-const answerRestaurantQuestion = (text, restaurants, here) => {
-  if (HOTEL_WORDS.test(text) || !RESTO_WORDS.test(text) || restaurants.length === 0) return null;
-
-  const wantsNearest = NEAREST_WORDS.test(text);
-  const wantsCheapest = CHEAPEST_WORDS.test(text);
-  if (wantsNearest === wantsCheapest) return null;
-
-  const cat = RESTO_CATEGORIES.find(([re]) => re.test(text));
-  const pool = cat
-    ? restaurants.filter((r) => (r.category || "").includes(cat[1]))
-    : restaurants;
-  const label = cat ? cat[2] : "places to eat";
-  if (pool.length === 0) return null;
-
-  if (wantsCheapest) {
-    const ranked = pool
-      .map((r) => ({ ...r, ...{ _p: parsePriceRange(r.priceRange) } }))
-      .filter((r) => r._p.min != null)
-      .sort((a, b) => a._p.min - b._p.min || a._p.max - b._p.max)
-      .slice(0, 3);
-    if (ranked.length === 0) return null;
-    return (
-      `Here are the cheapest ${label} in San Carlos 💸\n\n` +
-      ranked.map((r, i) => restoLine(r, i)).join("\n\n") +
-      `\n\nRanked by lowest starting price per person.`
-    );
-  }
-
-  const ranked = pool
-    .map((r) => {
-      const lat = r.location?.lat;
-      const lng = r.location?.lng;
-      const km =
-        typeof lat === "number" && typeof lng === "number"
-          ? getDistanceKm(here.latitude, here.longitude, lat, lng)
-          : null;
-      return { ...r, km };
-    })
-    .filter((r) => r.km != null)
-    .sort((a, b) => a.km - b.km)
-    .slice(0, 3);
-  if (ranked.length === 0)
-    return "I can't tell which place is nearest yet because no restaurant has a saved location. I can still tell you the cheapest ones, or list places by area. 😊";
-  return (
-    `Here are the nearest ${label} to you 📍\n\n` +
-    ranked.map((r, i) => restoLine(r, i, formatKm(r.km))).join("\n\n")
-  );
+// True when the message names one specific place (the AI should answer those)
+const mentionsKnownPlace = (text, items) => {
+  const t = normName(text);
+  return items.some((i) => {
+    const n = normName(i.name);
+    return n.length >= 4 && t.includes(n);
+  });
 };
 
+// Finds hotels / restaurants / spots named inside the AI's reply and
+// returns them as cards, in the order they were mentioned
+const cardsFromReply = (reply, groups, here) => {
+  const t = normName(reply);
+  const found = [];
+  groups.forEach(([type, list]) =>
+    withKm(list, here).forEach((item) => {
+      const n = normName(item.name);
+      if (n.length < 4) return;
+      const idx = t.indexOf(n);
+      if (idx >= 0) found.push({ type, item, idx });
+    })
+  );
+  return found
+    .sort((a, b) => a.idx - b.idx)
+    .slice(0, 8)
+    .map(({ type, item }) => ({ type, item }));
+};
+
+// Returns { text, cards } or null when the question should go to the AI
+const answerPlaceQuestion = (text, data, here) => {
+  const { hotels, restaurants, spots } = data;
+
+  const wants = {
+    hotel: HOTEL_WORDS.test(text),
+    restaurant: RESTO_WORDS.test(text),
+    spot: SPOT_WORDS.test(text),
+  };
+  const kinds = Object.keys(wants).filter((k) => wants[k]);
+  // Mixed questions ("hotel and restaurant near a beach") go to the AI
+  if (kinds.length !== 1) return null;
+  const type = kinds[0];
+
+  // "How much is Skyland Hotel?" -> AI answers, and the named place appears as a card
+  if (mentionsKnownPlace(text, [...hotels, ...restaurants, ...spots])) return null;
+
+  const wantsNearest = NEAREST_WORDS.test(text);
+  const wantsCheapest = type !== "spot" && CHEAPEST_WORDS.test(text);
+  if (wantsNearest && wantsCheapest) return null;
+
+  let pool;
+  let label;
+  if (type === "hotel") {
+    pool = hotels;
+    label = "hotels";
+  } else if (type === "restaurant") {
+    const cat = RESTO_CATEGORIES.find(([re]) => re.test(text));
+    pool = cat
+      ? restaurants.filter((r) => (r.category || "").includes(cat[1]))
+      : restaurants;
+    label = cat ? cat[2] : "places to eat";
+  } else {
+    pool = spots;
+    label = "tourist spots";
+  }
+  if (pool.length === 0) return null;
+
+  const list = withKm(pool, here);
+  const toCards = (items) => items.map((item) => ({ type, item }));
+
+  const minPrice = (item) =>
+    type === "hotel"
+      ? Number(item.priceFrom) > 0
+        ? Number(item.priceFrom)
+        : null
+      : parsePriceRange(item.priceRange).min;
+
+  if (wantsCheapest) {
+    const ranked = list
+      .filter((i) => minPrice(i) != null)
+      .sort((a, b) => minPrice(a) - minPrice(b))
+      .slice(0, 3);
+    if (ranked.length === 0) {
+      return { text: `I don't have any ${label} prices yet. 😊`, cards: [] };
+    }
+    return {
+      text:
+        `Here are the cheapest ${label} in San Carlos 💸` +
+        (type === "hotel"
+          ? "\nPrices are starting rates per night."
+          : "\nRanked by lowest starting price per person."),
+      cards: toCards(ranked),
+    };
+  }
+
+  if (wantsNearest) {
+    const ranked = list
+      .filter((i) => i.km != null)
+      .sort(byDistance)
+      .slice(0, 3);
+    if (ranked.length === 0) {
+      return {
+        text: `I can't tell which is nearest yet because none of the ${label} has a saved location. 😊`,
+        cards: [],
+      };
+    }
+    return {
+      text: `Here are the nearest ${label} to you 📍`,
+      cards: toCards(ranked),
+    };
+  }
+
+  // Plain list: "hotels in San Carlos", "show me restaurants", "tourist spots"
+  const limit = type === "hotel" ? 15 : 10;
+  const sorted = [...list].sort(byDistance);
+  const shown = sorted.slice(0, limit);
+  const more = sorted.length - shown.length;
+  return {
+    text:
+      `Here are the ${label} in San Carlos ✨ Tap one to see details.` +
+      (more > 0
+        ? `\nShowing ${shown.length} of ${sorted.length}. Ask for the nearest or cheapest to narrow it down.`
+        : ""),
+    cards: toCards(shown),
+  };
+};
+
+// ==========================================
+// RESULT CARD (looks like the hotel cards on the map screen)
+// ==========================================
+function PlaceCard({ type, item, onPress }) {
+  const initial =
+    item.name?.charAt(0)?.toUpperCase() ||
+    (type === "hotel" ? "H" : type === "restaurant" ? "R" : "S");
+  const subtitle =
+    type === "restaurant"
+      ? [item.cuisine, item.priceRange].filter(Boolean).join("  ·  ")
+      : type === "spot"
+      ? item.category
+      : null;
+
+  return (
+    <TouchableOpacity style={styles.placeCard} activeOpacity={0.85} onPress={onPress}>
+      {item.imageUrl ? (
+        <Image source={{ uri: item.imageUrl }} style={styles.placeImage} />
+      ) : (
+        <View style={[styles.placeImage, styles.placePlaceholder]}>
+          <Text style={styles.placePlaceholderText}>{initial}</Text>
+        </View>
+      )}
+
+      <View style={{ flex: 1 }}>
+        {type === "hotel" && item.dotAccredited ? (
+          <View style={styles.dotBadge}>
+            <Ionicons name="shield-checkmark" size={12} color={C.green} />
+            <Text style={styles.dotBadgeText}>DOT ACCREDITED</Text>
+          </View>
+        ) : null}
+
+        <Text style={styles.placeName} numberOfLines={1}>
+          {item.name}
+        </Text>
+
+        {subtitle ? (
+          <Text style={styles.placeMeta} numberOfLines={1}>
+            {subtitle}
+          </Text>
+        ) : null}
+
+        {item.km != null ? (
+          <View style={styles.placeRow}>
+            <Ionicons name="navigate-outline" size={12} color={C.muted} />
+            <Text style={styles.placeMeta}>{formatKm(item.km)}</Text>
+          </View>
+        ) : null}
+
+        {type === "hotel" && item.priceFrom ? (
+          <Text style={styles.placePrice}>
+            from {peso(item.priceFrom)}
+            <Text style={styles.placeUnit}> / night</Text>
+          </Text>
+        ) : null}
+
+        {type !== "hotel" && item.address ? (
+          <Text style={styles.placeMeta} numberOfLines={1}>
+            {item.address}
+          </Text>
+        ) : null}
+
+        {type === "spot" && item.description ? (
+          <Text style={styles.placeMeta} numberOfLines={2}>
+            {item.description}
+          </Text>
+        ) : null}
+      </View>
+
+      <Ionicons name="chevron-forward" size={16} color={C.faint} />
+    </TouchableOpacity>
+  );
+}
+
+// ==========================================
+// DETAILS SHEET (opens when a card is tapped)
+// ==========================================
+function ContactRow({ icon, text, onPress }) {
+  return (
+    <TouchableOpacity style={styles.contactRow} onPress={onPress} activeOpacity={0.7}>
+      <Ionicons name={icon} size={16} color={C.purple} />
+      <Text style={styles.contactText} numberOfLines={2}>
+        {text}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+function PlaceSheet({ place, packages, onClose, onOpenPackage, onDirections }) {
+  const insets = useSafeAreaInsets();
+  const type = place?.type;
+  const item = place?.item;
+  const coords = item ? getCoords(item) : null;
+
+  const subtitle = !item
+    ? ""
+    : [
+        item.km != null ? formatKm(item.km) : null,
+        type === "restaurant" ? item.cuisine : null,
+        type === "restaurant" ? item.priceRange : null,
+        type === "spot" ? item.category : null,
+        item.address,
+      ]
+        .filter(Boolean)
+        .join("  ·  ");
+
+  const packagePrice = (pkg) =>
+    pkg.totalPrice ||
+    pkg.price ||
+    (pkg.legs || []).reduce((sum, l) => sum + (Number(l.estimatedPrice) || 0), 0);
+
+  return (
+    <Modal visible={!!place} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.sheetWrap}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + 40 }]}>
+          <View style={styles.sheetHandle} />
+
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {item?.imageUrl ? (
+              <Image source={{ uri: item.imageUrl }} style={styles.sheetImage} />
+            ) : null}
+
+            <View style={styles.sheetHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sheetTitle}>{item?.name}</Text>
+                {subtitle ? <Text style={styles.sheetSubtitle}>{subtitle}</Text> : null}
+                {type === "hotel" && item?.priceFrom ? (
+                  <Text style={styles.placePrice}>
+                    from {peso(item.priceFrom)}
+                    <Text style={styles.placeUnit}> / night</Text>
+                  </Text>
+                ) : null}
+              </View>
+              <TouchableOpacity onPress={onClose} hitSlop={8} style={styles.closeBtn}>
+                <Ionicons name="close" size={18} color={C.muted} />
+              </TouchableOpacity>
+            </View>
+
+            {item?.openingHours ? (
+              <Text style={styles.sheetBody}>Hours: {item.openingHours}</Text>
+            ) : null}
+
+            {item?.description ? (
+              <Text style={styles.sheetBody}>{item.description}</Text>
+            ) : null}
+
+            {item?.phone ? (
+              <ContactRow
+                icon="call-outline"
+                text={item.phone}
+                onPress={() => openLink(`tel:${firstPhone(item.phone)}`)}
+              />
+            ) : null}
+
+            {item?.email ? (
+              <ContactRow
+                icon="mail-outline"
+                text={item.email}
+                onPress={() => openLink(`mailto:${item.email}`)}
+              />
+            ) : null}
+
+            {normalizeUrl(item?.facebookUrl) ? (
+              <ContactRow
+                icon="logo-facebook"
+                text={item.facebookName || "Facebook page"}
+                onPress={() => openLink(normalizeUrl(item.facebookUrl))}
+              />
+            ) : null}
+
+            {type === "spot" && packages.length > 0 ? (
+              <View style={{ marginTop: 8 }}>
+                <Text style={styles.sheetSection}>Trip packages</Text>
+                {packages.map((pkg) => (
+                  <TouchableOpacity
+                    key={pkg.id}
+                    style={styles.pkgRow}
+                    onPress={() => onOpenPackage(pkg, item)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.placeName} numberOfLines={1}>
+                        {pkg.name}
+                      </Text>
+                      {packagePrice(pkg) ? (
+                        <Text style={styles.placePrice}>{peso(packagePrice(pkg))}</Text>
+                      ) : null}
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={C.faint} />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
+
+            {coords ? (
+              <TouchableOpacity
+                style={styles.directionsBtn}
+                onPress={() => onDirections(place)}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="navigate-outline" size={16} color="#fff" />
+                <Text style={styles.directionsText}>Get directions</Text>
+              </TouchableOpacity>
+            ) : null}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export default function ChatScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState([
     {
       id: "1",
@@ -225,6 +529,7 @@ export default function ChatScreen({ navigation }) {
   const [restaurantsData, setRestaurantsData] = useState([]);
   const [packagesData, setPackagesData] = useState([]);
   const [userLocation, setUserLocation] = useState(null);
+  const [selectedPlace, setSelectedPlace] = useState(null); // { type, item }
 
   const flatListRef = useRef(null);
 
@@ -260,6 +565,49 @@ export default function ChatScreen({ navigation }) {
 
 
   
+  // ==========================================
+  // CARD ACTIONS (same behavior as the map screen)
+  // ==========================================
+  // Adds 1 to the view count so "most visited" stays accurate
+  const trackView = (collectionName, id) => {
+    if (!id) return;
+    updateDoc(doc(db, collectionName, id), { viewCount: increment(1) }).catch(() => {});
+  };
+
+  const openPlace = (type, item) => {
+    if (type === "hotel") {
+      trackView("hotels", item.id);
+      // A hotel with a booking link opens it directly, like on the map
+      const bookingUrl = normalizeUrl(item.externalBookingUrl);
+      if (bookingUrl) {
+        openLink(bookingUrl);
+        return;
+      }
+    }
+    if (type === "spot") trackView("touristSpots", item.id);
+    setSelectedPlace({ type, item });
+  };
+
+  // Directions are shown on the app's own map screen, not in Google Maps
+  const showDirections = (place) => {
+    const c = getCoords(place.item);
+    if (!c) return;
+    setSelectedPlace(null);
+    requestDirections({
+      kind: place.type === "restaurant" ? "resto" : place.type,
+      item: place.item,
+      lat: c.lat,
+      lng: c.lng,
+    });
+    // The map screen is the one this chat was opened from
+    setTimeout(() => navigation.goBack(), 250);
+  };
+
+  const openPackage = (pkg, spot) => {
+    setSelectedPlace(null);
+    setTimeout(() => navigation.navigate("PackageDetail", { package: pkg, spot }), 200);
+  };
+
   // ==========================================
   // FETCH DATA FROM FIRESTORE
   // ==========================================
@@ -393,12 +741,10 @@ export default function ChatScreen({ navigation }) {
     const nearest = (list, limit = 15) =>
       list
         .map((item) => {
-          const lat = item.location?.lat;
-          const lng = item.location?.lng;
-          const km =
-            typeof lat === "number" && typeof lng === "number"
-              ? getDistanceKm(here.latitude, here.longitude, lat, lng)
-              : null;
+          const c = getCoords(item);
+          const km = c
+            ? getDistanceKm(here.latitude, here.longitude, c.lat, c.lng)
+            : null;
           return { ...item, km };
         })
         .sort((a, b) => (a.km ?? Infinity) - (b.km ?? Infinity))
@@ -652,13 +998,24 @@ ${vehiclesText}
       latitude: TOURISM_OFFICE.latitude,
       longitude: TOURISM_OFFICE.longitude,
     };
-    const hotelReply =
-      answerHotelQuestion(trimmed, accommodationsData, here) ||
-      answerRestaurantQuestion(trimmed, mergeRestaurants(restaurantsData), here);
-    if (hotelReply) {
+    const placeReply = answerPlaceQuestion(
+      trimmed,
+      {
+        hotels: accommodationsData,
+        restaurants: mergeRestaurants(restaurantsData),
+        spots: spotsData,
+      },
+      here
+    );
+    if (placeReply) {
       setMessages((prev) => [
         ...prev,
-        { id: `${Date.now()}-hotel`, role: "assistant", text: hotelReply },
+        {
+          id: `${Date.now()}-places`,
+          role: "assistant",
+          text: placeReply.text,
+          cards: placeReply.cards,
+        },
       ]);
       return;
     }
@@ -753,12 +1110,23 @@ ${vehiclesText}
         data?.candidates?.[0]?.content?.parts?.[0]?.text ||
         "Sorry, I couldn't get a response. Please try again.";
 
+      const cards = cardsFromReply(
+        reply,
+        [
+          ["hotel", accommodationsData],
+          ["restaurant", mergeRestaurants(restaurantsData)],
+          ["spot", spotsData],
+        ],
+        here
+      );
+
       setMessages((prev) => [
         ...prev,
         {
           id: (Date.now() + 1).toString(),
           role: "assistant",
           text: reply,
+          cards,
         },
       ]);
     } catch (error) {
@@ -784,28 +1152,44 @@ ${vehiclesText}
     const isUser = item.role === "user";
 
     return (
-      <View
-        style={[
-          styles.messageBubble,
-          isUser ? styles.userBubble : styles.assistantBubble,
-        ]}
-      >
-        {!isUser && (
-          <View style={styles.botAvatarSmall}>
-            <Text style={styles.botAvatarText}>🤖</Text>
-          </View>
-        )}
-
+      <View>
         <View
           style={[
-            styles.bubbleContent,
-            isUser ? styles.userBubbleContent : styles.assistantBubbleContent,
+            styles.messageBubble,
+            isUser ? styles.userBubble : styles.assistantBubble,
           ]}
         >
-          <Text style={isUser ? styles.userText : styles.assistantText}>
-            {item.text}
-          </Text>
+          {!isUser && (
+            <View style={styles.botAvatarSmall}>
+              <Text style={styles.botAvatarText}>🤖</Text>
+            </View>
+          )}
+
+          <View
+            style={[
+              styles.bubbleContent,
+              isUser ? styles.userBubbleContent : styles.assistantBubbleContent,
+            ]}
+          >
+            <Text style={isUser ? styles.userText : styles.assistantText}>
+              {item.text}
+            </Text>
+          </View>
         </View>
+
+        {/* Tappable result cards (hotels, restaurants, tourist spots) */}
+        {!isUser && item.cards?.length > 0 && (
+          <View style={styles.cardsWrap}>
+            {item.cards.map(({ type, item: place }) => (
+              <PlaceCard
+                key={`${type}-${place.id || place.name}`}
+                type={type}
+                item={place}
+                onPress={() => openPlace(type, place)}
+              />
+            ))}
+          </View>
+        )}
       </View>
     );
   };
@@ -814,14 +1198,15 @@ ${vehiclesText}
   // UI
   // ==========================================
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["left", "right", "bottom"]}>
+      <StatusBar barStyle="light-content" backgroundColor={C.navy} />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
       >
         {/* HEADER */}
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
           <TouchableOpacity
             onPress={() => navigation.goBack()}
             style={styles.backBtn}
@@ -870,7 +1255,7 @@ ${vehiclesText}
             </View>
 
             <View style={styles.typingBubble}>
-              <ActivityIndicator size="small" color="#1A56DB" />
+              <ActivityIndicator size="small" color={C.purple} />
 
               <Text style={styles.typingText}>Typing...</Text>
             </View>
@@ -882,7 +1267,7 @@ ${vehiclesText}
           <TextInput
             style={styles.input}
             placeholder="Ask about spots, hotels, restaurants, or vehicles..."
-            placeholderTextColor="#888"
+            placeholderTextColor="#94A3B8"
             value={input}
             onChangeText={setInput}
             multiline
@@ -902,6 +1287,19 @@ ${vehiclesText}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      {/* DETAILS SHEET for the tapped card */}
+      <PlaceSheet
+        place={selectedPlace}
+        packages={
+          selectedPlace?.type === "spot"
+            ? packagesData.filter((p) => p.spotId === selectedPlace.item.id)
+            : []
+        }
+        onClose={() => setSelectedPlace(null)}
+        onOpenPackage={openPackage}
+        onDirections={showDirections}
+      />
     </SafeAreaView>
   );
 }
@@ -913,7 +1311,7 @@ ${vehiclesText}
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F0F4FF",
+    backgroundColor: C.bg,
   },
 
   header: {
@@ -923,9 +1321,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 14,
-    backgroundColor: "#FFFFFF",
-    borderBottomWidth: 1,
-    borderBottomColor: "#E8EDF5",
+    backgroundColor: C.navy,
     elevation: 3,
   },
 
@@ -938,7 +1334,7 @@ const styles = StyleSheet.create({
 
   backText: {
     fontSize: 24,
-    color: "#1A56DB",
+    color: "#FFFFFF",
     fontWeight: "bold",
   },
 
@@ -952,7 +1348,7 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: "#E8F0FF",
+    backgroundColor: C.purpleSoft,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -964,12 +1360,12 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 15,
     fontWeight: "700",
-    color: "#1A1A2E",
+    color: "#FFFFFF",
   },
 
   headerSubtitle: {
     fontSize: 11,
-    color: "#1A56DB",
+    color: C.gold,
     fontWeight: "500",
   },
 
@@ -997,7 +1393,7 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: "#E8F0FF",
+    backgroundColor: C.purpleSoft,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 8,
@@ -1016,13 +1412,15 @@ const styles = StyleSheet.create({
   },
 
   userBubbleContent: {
-    backgroundColor: "#1A56DB",
+    backgroundColor: C.navy,
     borderBottomRightRadius: 4,
   },
 
   assistantBubbleContent: {
     backgroundColor: "#FFFFFF",
     borderBottomLeftRadius: 4,
+    borderWidth: 1,
+    borderColor: C.border,
     elevation: 1,
   },
 
@@ -1033,10 +1431,147 @@ const styles = StyleSheet.create({
   },
 
   assistantText: {
-    color: "#1A1A2E",
+    color: C.text,
     fontSize: 14,
     lineHeight: 20,
   },
+
+  // ---- result cards (same look as the map screen) ----
+  cardsWrap: {
+    marginLeft: 38, // lines up under the bot bubble (avatar 30 + gap 8)
+    marginBottom: 14,
+    gap: 10,
+  },
+
+  placeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: C.border,
+    elevation: 1,
+  },
+
+  placeImage: { width: 84, height: 84, borderRadius: 12 },
+
+  placePlaceholder: {
+    backgroundColor: C.purpleSoft,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  placePlaceholderText: { fontSize: 26, fontWeight: "800", color: C.purple },
+
+  placeName: { fontSize: 14, fontWeight: "700", color: C.text },
+
+  placeMeta: { fontSize: 12, color: C.muted, marginTop: 2 },
+
+  placeRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 },
+
+  placePrice: { fontSize: 13, fontWeight: "700", color: C.purple, marginTop: 3 },
+
+  placeUnit: { fontSize: 11, fontWeight: "500", color: C.muted },
+
+  dotBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 4,
+    backgroundColor: C.greenSoft,
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginBottom: 4,
+  },
+
+  dotBadgeText: { fontSize: 9, fontWeight: "800", color: C.green },
+
+  // ---- details sheet ----
+  sheetWrap: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(11,18,36,0.45)",
+  },
+
+  sheet: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 28,
+    maxHeight: "82%",
+  },
+
+  sheetHandle: {
+    alignSelf: "center",
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: C.border,
+    marginBottom: 12,
+  },
+
+  sheetImage: { width: "100%", height: 160, borderRadius: 16, marginBottom: 12 },
+
+  sheetHeader: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+
+  sheetTitle: { fontSize: 18, fontWeight: "800", color: C.text },
+
+  sheetSubtitle: { fontSize: 12, color: C.muted, marginTop: 3 },
+
+  sheetBody: { fontSize: 13, color: C.muted, lineHeight: 19, marginTop: 10 },
+
+  sheetSection: { fontSize: 14, fontWeight: "700", color: C.text, marginBottom: 6 },
+
+  closeBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "#F1F5F9",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  contactRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: C.purpleSoft,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    marginTop: 10,
+  },
+
+  contactText: { flex: 1, fontSize: 13, fontWeight: "600", color: C.text },
+
+  pkgRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+  },
+
+  directionsBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: C.purple,
+    borderRadius: 14,
+    paddingVertical: 13,
+    marginTop: 14,
+  },
+
+  directionsText: { color: "#fff", fontSize: 14, fontWeight: "700" },
 
   typingContainer: {
     flexDirection: "row",
@@ -1049,6 +1584,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: C.border,
     borderRadius: 18,
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -1069,7 +1606,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: "#FFFFFF",
     borderTopWidth: 1,
-    borderTopColor: "#E8EDF5",
+    borderTopColor: C.border,
     gap: 10,
 
     // Keeps the input box raised from the bottom
@@ -1078,27 +1615,29 @@ const styles = StyleSheet.create({
 
   input: {
     flex: 1,
-    backgroundColor: "#F0F4FF",
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.border,
     borderRadius: 22,
     paddingHorizontal: 16,
     paddingVertical: 10,
     fontSize: 14,
     maxHeight: 100,
-    color: "#1A1A2E",
+    color: C.text,
   },
 
   sendBtn: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: "#1A56DB",
+    backgroundColor: C.navy,
     justifyContent: "center",
     alignItems: "center",
     elevation: 2,
   },
 
   sendBtnDisabled: {
-    backgroundColor: "#B0C4DE",
+    backgroundColor: "#B9D6BF",
   },
 
   sendBtnText: {
